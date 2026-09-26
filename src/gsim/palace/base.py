@@ -23,6 +23,7 @@ from gsim.palace.models import (
     NumericalConfig,
     PortConfig,
     TerminalConfig,
+    TwoTerminalPortConfig,
     WavePortConfig,
 )
 from gsim.palace.models.results import SimulationResult, ValidationResult
@@ -165,6 +166,7 @@ class PalaceSimMixin:
     ports: list[PortConfig]
     cpw_ports: list[CPWPortConfig]
     wave_ports: list[WavePortConfig]
+    two_terminal_ports: list[TwoTerminalPortConfig]
     terminals: list[TerminalConfig]
     simulation_type: Literal["driven", "eigenmode", "electrostatic", "boundarymode"]
     _output_dir: Path | None
@@ -948,7 +950,12 @@ class PalaceSimMixin:
 
         # Check ports
 
-        has_ports = bool(self.ports) or bool(self.cpw_ports) or bool(self.wave_ports)
+        has_ports = (
+            bool(self.ports)
+            or bool(self.cpw_ports)
+            or bool(self.wave_ports)
+            or bool(self.two_terminal_ports)
+        )
         if not has_ports:
             if self.simulation_type == "driven":
                 warnings_list.append(
@@ -968,11 +975,11 @@ class PalaceSimMixin:
                     and port.voltage_path is None
                 ):
                     errors.append(f"Port '{port.name}': inplane ports require 'layer'")
-                if port.geometry == "via" and (
+                if port.geometry == "interlayer" and (
                     port.from_layer is None or port.to_layer is None
                 ):
                     errors.append(
-                        f"Port '{port.name}': via ports require "
+                        f"Port '{port.name}': interlayer ports require "
                         "'from_layer' and 'to_layer'"
                     )
 
@@ -1041,7 +1048,8 @@ class PalaceSimMixin:
         from gsim.palace.ports import (
             configure_cpw_port,
             configure_inplane_port,
-            configure_via_port,
+            configure_interlayer_port,
+            configure_two_terminal_port,
             configure_wave_port,
         )
 
@@ -1065,7 +1073,21 @@ class PalaceSimMixin:
                     f"Available ports: {[p.name for p in component.ports]}"
                 )
 
-            if port_config.geometry == "inplane" and port_config.layer is not None:
+            if port_config.geometry == "gap":
+                from gsim.palace.ports.config import configure_gap_port
+
+                if port_config.layer is None:
+                    raise ValueError(
+                        f"Port '{port_config.name}': gap port requires a layer."
+                    )
+                configure_gap_port(
+                    gf_port,
+                    layer=port_config.layer,
+                    impedance=port_config.impedance,
+                    excited=port_config.excited,
+                    offset=port_config.offset,
+                )
+            elif port_config.geometry == "inplane" and port_config.layer is not None:
                 configure_inplane_port(
                     gf_port,
                     layer=port_config.layer,
@@ -1074,10 +1096,10 @@ class PalaceSimMixin:
                     excited=port_config.excited,
                     offset=port_config.offset,
                 )
-            elif port_config.geometry == "via" and (
+            elif port_config.geometry == "interlayer" and (
                 port_config.from_layer is not None and port_config.to_layer is not None
             ):
-                configure_via_port(
+                configure_interlayer_port(
                     gf_port,
                     from_layer=port_config.from_layer,
                     to_layer=port_config.to_layer,
@@ -1140,6 +1162,19 @@ class PalaceSimMixin:
                     mode=port_config.mode,
                     offset=port_config.offset,
                 )
+
+        # Configure two-terminal ports
+        for tt_config in self.two_terminal_ports or []:
+            plus_gf_port = self._find_gf_port(tt_config.plus_port)
+            minus_gf_port = self._find_gf_port(tt_config.minus_port)
+
+            configure_two_terminal_port(
+                plus_gf_port,
+                minus_gf_port,
+                layer=tt_config.layer,
+                impedance=tt_config.impedance,
+                excited=tt_config.excited,
+            )
 
         self._configured_ports = True
 
@@ -2591,7 +2626,7 @@ class PalaceSimMixin:
         inductance: float | None = None,
         capacitance: float | None = None,
         excited: bool = True,
-        geometry: Literal["inplane", "via"] = "inplane",
+        geometry: Literal["inplane", "gap", "interlayer", "via"] = "inplane",
         voltage_path: list[list[float]] | None = None,
         current_path: list[list[float]] | None = None,
         nsamples: int = 100,
@@ -2604,8 +2639,8 @@ class PalaceSimMixin:
         Args:
             name: Port name (must match component port name)
             layer: Target layer for inplane ports
-            from_layer: Bottom layer for via ports
-            to_layer: Top layer for via ports
+            from_layer: First conductor layer for interlayer ports
+            to_layer: Second conductor layer for interlayer ports
             length: Port extent along direction (um)
             offset: Shift the port inward along the waveguide (um).
                 Positive moves away from the boundary, into the conductor.
@@ -2614,7 +2649,14 @@ class PalaceSimMixin:
             inductance: Series inductance (H)
             capacitance: Shunt capacitance (F)
             excited: Whether this port is excited
-            geometry: Port geometry type ("inplane" or "via")
+            geometry: ``"inplane"``, ``"gap"``, or ``"interlayer"``. Gap ports
+                are vertical sheets
+                with GDS width spanning the gap along orientation, centered in
+                the gap and extending through the conductor layer thickness.
+                Gap ports currently require cardinal orientations; omit length.
+                ``"interlayer"`` creates a Z-directed sheet between two layers.
+                ``"via"`` is a deprecated alias for ``"interlayer"``. Use
+                :meth:`add_cpw_port` for the ``"cpw"`` lumped-port geometry.
             voltage_path: For BoundaryMode only - open signal->ground path (um)
                 used to post-process the mode voltage (mode-V.csv). Points may
                 be 2D cross-section coordinates or 3D layout coordinates.
@@ -2628,7 +2670,10 @@ class PalaceSimMixin:
         Example:
             >>> sim.add_port("o1", layer="topmetal2", length=5.0)
             >>> sim.add_port(
-            ...     "feed", from_layer="metal1", to_layer="topmetal2", geometry="via"
+            ...     "feed",
+            ...     from_layer="metal1",
+            ...     to_layer="topmetal2",
+            ...     geometry="interlayer",
             ... )
         """
         # Remove existing config for this port if any
@@ -2728,6 +2773,47 @@ class PalaceSimMixin:
                 center=center,
                 orientation=orientation,
                 order=len(self.ports) + len(self.cpw_ports),
+            )
+        )
+
+    def add_two_terminal_port(
+        self,
+        plus_port: str,
+        minus_port: str,
+        *,
+        layer: str,
+        impedance: float = 50.0,
+        excited: bool = True,
+    ) -> None:
+        """Add a two-terminal lumped port for true 1-port S11 simulation.
+
+        Combines two GDS ports into a single Palace LumpedPort with two EDGE-geometry
+        elements (vertical surfaces spanning the conductor thickness). No artificial
+        reference layer is needed — P1 is the excitation and P2 is the reference,
+        both on the same metal layer.
+
+        Args:
+            plus_port: GDS port name for the + (excitation) terminal
+            minus_port: GDS port name for the - (reference) terminal
+            layer: Conductor layer containing both terminals (e.g., "metal1")
+            impedance: Port impedance in Ohms (default: 50)
+            excited: Whether this port is excited (default: True)
+
+        Example:
+            >>> sim.add_two_terminal_port("P1", "P2", layer="metal1", excited=True)
+        """
+        self.two_terminal_ports = [
+            p
+            for p in self.two_terminal_ports
+            if p.plus_port != plus_port and p.minus_port != minus_port
+        ]
+        self.two_terminal_ports.append(
+            TwoTerminalPortConfig(
+                plus_port=plus_port,
+                minus_port=minus_port,
+                layer=layer,
+                impedance=impedance,
+                excited=excited,
             )
         )
 

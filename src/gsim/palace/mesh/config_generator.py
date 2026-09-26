@@ -513,8 +513,8 @@ def generate_palace_config(
                 port_group = groups["port_surfaces"][port_key]
 
                 if port.multi_element:
-                    # Multi-element port (CPW)
-                    if port_group.get("type") == "cpw":
+                    # Multi-element port (CPW or two-terminal EDGE)
+                    if port_group.get("type") in ("cpw", "two_terminal"):
                         elements = [
                             {
                                 "Attributes": [elem["phys_group"]],
@@ -535,7 +535,8 @@ def generate_palace_config(
                     if port.port_type == PortType.LUMPED:
                         direction = (
                             "Z"
-                            if port.geometry == PortGeometry.VIA
+                            if port.geometry
+                            in (PortGeometry.INTERLAYER, PortGeometry.VIA)
                             else port.direction.upper()
                         )
 
