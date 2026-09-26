@@ -102,6 +102,46 @@ class DielectricRegion:
     zmax: float
 
 
+def _resolve_stack_z_extent(
+    stack: LayerStack,
+    use_airbox: bool,
+) -> tuple[float, float]:
+    """Resolve the z-envelope of the meshed dielectric/airbox volumes.
+
+    Mirrors :func:`resolve_dielectric_regions`: non-air-like dielectrics define
+    the envelope (air-like ones are replaced by the explicit airbox), falling
+    back to layer extents and finally ``stack.get_z_range()``. Sharing this
+    keeps :func:`resolve_mesh_domain_bounds` (used to clip ``max_size`` ports)
+    in exact agreement with the volumes actually created by
+    :func:`add_dielectrics`.
+    """
+    z_min = math.inf
+    z_max = -math.inf
+    for dielectric in stack.dielectrics:
+        dielectric_name = str(dielectric.get("name", "dielectric"))
+        material = str(dielectric["material"])
+        if use_airbox and is_air_like_material(
+            stack, material, dielectric_name=dielectric_name
+        ):
+            continue
+        d_zmin = float(dielectric["zmin"])
+        d_zmax = float(dielectric["zmax"])
+        if d_zmax <= d_zmin:
+            continue
+        z_min = min(z_min, d_zmin)
+        z_max = max(z_max, d_zmax)
+
+    if not (math.isfinite(z_min) and math.isfinite(z_max)):
+        for layer in stack.layers.values():
+            z_min = min(z_min, layer.zmin)
+            z_max = max(z_max, layer.zmax)
+
+    if not (math.isfinite(z_min) and math.isfinite(z_max)):
+        z_min, z_max = stack.get_z_range()
+
+    return z_min, z_max
+
+
 def resolve_dielectric_regions(
     geometry: GeometryData,
     stack: LayerStack,
@@ -137,9 +177,6 @@ def resolve_dielectric_regions(
     xmax_air = xmax0 + margin_x
     ymax_air = ymax0 + margin_y
 
-    z_min_all = math.inf
-    z_max_all = -math.inf
-
     use_airbox = any(
         m > 0.0
         for m in (
@@ -149,6 +186,8 @@ def resolve_dielectric_regions(
             airbox_z_below,
         )
     )
+
+    z_min_all, z_max_all = _resolve_stack_z_extent(stack, use_airbox)
 
     regions: list[DielectricRegion] = []
     for dielectric in stack.dielectrics:
@@ -165,9 +204,6 @@ def resolve_dielectric_regions(
         d_zmax = float(dielectric["zmax"])
         if d_zmax <= d_zmin:
             continue
-
-        z_min_all = min(z_min_all, d_zmin)
-        z_max_all = max(z_max_all, d_zmax)
 
         xmin = xmin_air if is_air_like else xmin0
         ymin = ymin_air if is_air_like else ymin0
@@ -186,11 +222,6 @@ def resolve_dielectric_regions(
                 zmax=d_zmax,
             )
         )
-
-    if not (math.isfinite(z_min_all) and math.isfinite(z_max_all)):
-        for layer in stack.layers.values():
-            z_min_all = min(z_min_all, layer.zmin)
-            z_max_all = max(z_max_all, layer.zmax)
 
     if use_airbox:
         if not (math.isfinite(z_min_all) and math.isfinite(z_max_all)):
@@ -1038,27 +1069,6 @@ def resolve_mesh_domain_bounds(
     xmax_air = xmax0 + margin_x
     ymax_air = ymax0 + margin_y
 
-    # Robust stack z-envelope: include dielectric and layer extents.
-    z_min_all = math.inf
-    z_max_all = -math.inf
-    for dielectric in stack.dielectrics:
-        z_min_all = min(z_min_all, dielectric["zmin"])
-        z_max_all = max(z_max_all, dielectric["zmax"])
-
-    if not (math.isfinite(z_min_all) and math.isfinite(z_max_all)):
-        z_try_min, z_try_max = stack.get_z_range()
-        z_min_all = min(z_min_all, z_try_min)
-        z_max_all = max(z_max_all, z_try_max)
-
-    if stack.layers:
-        z_min_layers = min(layer.zmin for layer in stack.layers.values())
-        z_max_layers = max(layer.zmax for layer in stack.layers.values())
-        z_min_all = min(z_min_all, z_min_layers)
-        z_max_all = max(z_max_all, z_max_layers)
-
-    if not (math.isfinite(z_min_all) and math.isfinite(z_max_all)):
-        raise ValueError("Cannot resolve stack z extents for domain bounds")
-
     use_airbox = any(
         m > 0.0
         for m in (
@@ -1068,6 +1078,17 @@ def resolve_mesh_domain_bounds(
             airbox_z_below,
         )
     )
+
+    # Derive the stack z-envelope from the SAME rule used to build the mesh
+    # volumes. Adding raw layer extents here can place a max_size port outside
+    # the actual meshed domain when a layer extends beyond the dielectric
+    # envelope (e.g. gpdk ``box``/``undercut`` at z=-3 vs ``oxide`` at z=-2).
+    # The port surface then has orphan boundary faces and Palace aborts with
+    # "MFEM abort: (r,c,f) = ...".
+    z_min_all, z_max_all = _resolve_stack_z_extent(stack, use_airbox)
+
+    if not (math.isfinite(z_min_all) and math.isfinite(z_max_all)):
+        raise ValueError("Cannot resolve stack z extents for domain bounds")
 
     if use_airbox:
         return (
