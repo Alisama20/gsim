@@ -349,11 +349,10 @@ class PalaceSimMixin:
         if not material or not isinstance(material, str):
             raise ValueError("material must be a non-empty string")
 
-        # Keep mesh margin controls in sync for domain/port extents.
-        mesh_config = getattr(self, "mesh_config", None)
-        if mesh_config is not None:
-            mesh_config.margin_x = mx
-            mesh_config.margin_y = my
+        # Deliberately not synced into ``mesh_config.margin_x``/``margin_y``:
+        # the airbox config below is the single source of the lateral margin, and
+        # writing it to both made it possible to apply it twice. See
+        # ``_resolve_domain_margins``.
 
         # Store explicit airbox expansion for generator plumbing.
         self._airbox_config = {
@@ -363,6 +362,24 @@ class PalaceSimMixin:
             "z_below": zb,
             "material": material,
         }
+
+    def _resolve_domain_margins(self, mesh_config) -> tuple[float, float]:
+        """Lateral margins for the mesh domain, excluding the airbox expansion.
+
+        ``set_airbox()`` owns the lateral margin whenever it has been called: the
+        requested value travels to the mesher as ``airbox_margin_x`` /
+        ``airbox_margin_y`` and is applied there, so it must not be applied a
+        second time as the domain margin. Passing it in both places padded the
+        air volume twice, so ``set_airbox(margin_x=N)`` produced ``2 * N`` um of
+        air.
+
+        ``mesh_config`` is only the fallback, for a simulation that never called
+        ``set_airbox()`` and sizes its domain through the mesh config alone.
+        """
+        airbox_cfg = self._airbox_config or {}
+        margin_x = 0.0 if "margin_x" in airbox_cfg else mesh_config.effective_margin_x
+        margin_y = 0.0 if "margin_y" in airbox_cfg else mesh_config.effective_margin_y
+        return margin_x, margin_y
 
     def _apply_airbox_overrides(
         self,
@@ -1391,15 +1408,10 @@ class PalaceSimMixin:
         # Resolve stack
         stack = self._resolve_stack()
         airbox_cfg = self._airbox_config or {}
-        domain_margin_x = airbox_cfg.get("margin_x", mesh_config.effective_margin_x)
-        domain_margin_y = airbox_cfg.get("margin_y", mesh_config.effective_margin_y)
+        domain_margin_x, domain_margin_y = self._resolve_domain_margins(mesh_config)
 
         if verbose:
             logger.info("Generating mesh in %s", output_dir)
-
-        airbox_cfg = getattr(self, "_airbox_config", {})
-        domain_margin_x = airbox_cfg.get("margin_x", mesh_config.effective_margin_x)
-        domain_margin_y = airbox_cfg.get("margin_y", mesh_config.effective_margin_y)
 
         mesh_result = generate_mesh(
             component=component,
@@ -1621,13 +1633,9 @@ class PalaceSimMixin:
         ports = self._get_ports_for_preview(stack)
 
         airbox_cfg = self._airbox_config or {}
-        domain_margin_x = airbox_cfg.get("margin_x", mesh_config.effective_margin_x)
-        domain_margin_y = airbox_cfg.get("margin_y", mesh_config.effective_margin_y)
+        domain_margin_x, domain_margin_y = self._resolve_domain_margins(mesh_config)
 
         # Generate mesh in temp directory
-        airbox_cfg = getattr(self, "_airbox_config", {})
-        domain_margin_x = airbox_cfg.get("margin_x", mesh_config.effective_margin_x)
-        domain_margin_y = airbox_cfg.get("margin_y", mesh_config.effective_margin_y)
         with tempfile.TemporaryDirectory() as tmpdir:
             generate_mesh(
                 component=component,
