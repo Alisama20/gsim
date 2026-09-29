@@ -744,6 +744,9 @@ class PalaceSimMixin:
         high_order_elements: bool | None = None,
         high_order_order: int | None = None,
         high_order_optimize: bool | None = None,
+        algorithm_3d: Literal["delaunay", "hxt"] | None = None,
+        threads: int | None = None,
+        surface_threads: int | None = None,
     ) -> MeshConfig:
         """Build mesh config from preset with optional overrides.
 
@@ -829,6 +832,9 @@ class PalaceSimMixin:
             mesh_config.high_order_elements = existing_config.high_order_elements
             mesh_config.high_order_order = existing_config.high_order_order
             mesh_config.high_order_optimize = existing_config.high_order_optimize
+            mesh_config.algorithm_3d = existing_config.algorithm_3d
+            mesh_config.threads = existing_config.threads
+            mesh_config.surface_threads = existing_config.surface_threads
 
         # Preserve planar_conductors from sim.mesh_config if not
         # explicitly provided via sim.mesh(planar_conductors=...)
@@ -873,6 +879,12 @@ class PalaceSimMixin:
             mesh_config.high_order_order = high_order_order
         if high_order_optimize is not None:
             mesh_config.high_order_optimize = high_order_optimize
+        if algorithm_3d is not None:
+            mesh_config.algorithm_3d = algorithm_3d
+        if threads is not None:
+            mesh_config.threads = threads
+        if surface_threads is not None:
+            mesh_config.surface_threads = surface_threads
         mesh_config.show_gui = show_gui
 
         return mesh_config
@@ -1510,6 +1522,9 @@ class PalaceSimMixin:
             high_order_elements=mesh_config.high_order_elements,
             high_order_order=mesh_config.high_order_order,
             high_order_optimize=mesh_config.high_order_optimize,
+            algorithm_3d=mesh_config.algorithm_3d,
+            threads=mesh_config.threads,
+            surface_threads=mesh_config.surface_threads,
             verbosity=gmsh_verbosity,
             decimate_tolerance=decimate_tolerance,
         )
@@ -1632,6 +1647,9 @@ class PalaceSimMixin:
         high_order_elements: bool | None = None,
         high_order_order: int | None = None,
         high_order_optimize: bool | None = None,
+        algorithm_3d: Literal["delaunay", "hxt"] | None = None,
+        threads: int | None = None,
+        surface_threads: int | None = None,
         decimate_tolerance: float | None = None,
     ) -> None:
         """Preview the mesh without running simulation.
@@ -1664,6 +1682,10 @@ class PalaceSimMixin:
             high_order_elements: Enable high-order geometric mesh elements.
             high_order_order: Polynomial order for high-order elements.
             high_order_optimize: Run gmsh high-order optimization after meshing.
+            algorithm_3d: Gmsh 3D meshing algorithm, "delaunay" or "hxt".
+            threads: Threads for 3D meshing (see ``MeshConfig``).
+            surface_threads: Threads for 1D and 2D meshing. Above 1 the mesh
+                differs from run to run.
             decimate_tolerance: Relative tolerance for polygon decimation
                 (None = no decimation; typical 0.001-0.01).
 
@@ -1708,6 +1730,9 @@ class PalaceSimMixin:
             high_order_elements=high_order_elements,
             high_order_order=high_order_order,
             high_order_optimize=high_order_optimize,
+            algorithm_3d=algorithm_3d,
+            threads=threads,
+            surface_threads=surface_threads,
         )
 
         # Resolve stack
@@ -1755,6 +1780,9 @@ class PalaceSimMixin:
                 high_order_elements=mesh_config.high_order_elements,
                 high_order_order=mesh_config.high_order_order,
                 high_order_optimize=mesh_config.high_order_optimize,
+                algorithm_3d=mesh_config.algorithm_3d,
+                threads=mesh_config.threads,
+                surface_threads=mesh_config.surface_threads,
                 decimate_tolerance=decimate_tolerance,
             )
 
@@ -1793,6 +1821,9 @@ class PalaceSimMixin:
         high_order_elements: bool | None = None,
         high_order_order: int | None = None,
         high_order_optimize: bool | None = None,
+        algorithm_3d: Literal["delaunay", "hxt"] | None = None,
+        threads: int | None = None,
+        surface_threads: int | None = None,
     ) -> SimulationResult:
         """Generate the mesh for Palace simulation.
 
@@ -1840,6 +1871,10 @@ class PalaceSimMixin:
             high_order_elements: Enable high-order geometric mesh elements.
             high_order_order: Polynomial order for high-order elements.
             high_order_optimize: Run gmsh high-order optimization after meshing.
+            algorithm_3d: Gmsh 3D meshing algorithm, "delaunay" or "hxt".
+            threads: Threads for 3D meshing (see ``MeshConfig``).
+            surface_threads: Threads for 1D and 2D meshing. Above 1 the mesh
+                differs from run to run.
 
         Returns:
             SimulationResult with mesh path
@@ -1888,6 +1923,9 @@ class PalaceSimMixin:
             high_order_elements=high_order_elements,
             high_order_order=high_order_order,
             high_order_optimize=high_order_optimize,
+            algorithm_3d=algorithm_3d,
+            threads=threads,
+            surface_threads=surface_threads,
         )
 
         if merge_via_distance is not None:
