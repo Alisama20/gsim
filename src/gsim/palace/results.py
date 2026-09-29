@@ -275,7 +275,7 @@ class PalaceTextResults:
         rows = self.csv_tables.get("error-indicators.csv")
         if not rows:
             return None
-        row = {str(k).strip(): v for k, v in rows[-1].items() if k is not None}
+        row = {str(k).strip(): v for k, v in rows[-1].items()}
         columns = {"norm": "Norm", "min": "Minimum", "max": "Maximum", "mean": "Mean"}
         return {key: self._to_float(row.get(column)) for key, column in columns.items()}
 

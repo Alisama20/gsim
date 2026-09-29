@@ -146,3 +146,33 @@ def test_a_metric_crossing_zero_does_not_fail(transmon_amr) -> None:
     )
     assert math.isnan(table[1]["relative_change"])
     assert table[2]["relative_change"] == pytest.approx(1.0)
+
+
+def test_a_pass_without_error_indicators_reads_as_none(tmp_path) -> None:
+    """Palace only writes error-indicators.csv when it estimated an error."""
+    (tmp_path / "eig.csv").write_text(EIG_HEADER + TRANSMON_AMR["."][1])
+    assert load_refinement_history(tmp_path)[-1].error_indicators is None
+
+
+def test_convergence_lists_a_pass_that_has_no_error_estimate(tmp_path) -> None:
+    _write_pass(tmp_path / "iteration1", *TRANSMON_AMR["iteration1"])
+    (tmp_path / "eig.csv").write_text(EIG_HEADER + TRANSMON_AMR["."][1])
+    table = refinement_convergence(load_refinement_history(tmp_path), _mode1_frequency)
+    assert table[0]["error_norm"] == pytest.approx(0.3455421238025)
+    assert table[1]["error_norm"] is None
+    assert table[1]["value"] == pytest.approx(4.398274617639)
+
+
+def test_a_field_beyond_the_header_is_ignored(tmp_path) -> None:
+    """A trailing comma adds a field with no column name."""
+    error_row = TRANSMON_AMR["."][0].rstrip("\n") + ",\n"
+    _write_pass(tmp_path, error_row, TRANSMON_AMR["."][1])
+    final = load_refinement_history(tmp_path)[-1]
+    assert final.error_indicators == pytest.approx(
+        {
+            "norm": 0.2122785931511,
+            "min": 4.806347984241e-08,
+            "max": 9.849547968700e-03,
+            "mean": 3.088679913680e-04,
+        }
+    )
