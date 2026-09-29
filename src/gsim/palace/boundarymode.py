@@ -17,6 +17,7 @@ from gsim.palace.models import (
     MeshConfig,
     NumericalConfig,
     PortConfig,
+    RefinementConfig,
     TerminalConfig,
     TwoTerminalPortConfig,
     WavePortConfig,
@@ -59,6 +60,7 @@ class BoundaryModeSim(PalaceSimMixin, BaseModel):
     mesh_config: MeshConfig = Field(default_factory=MeshConfig.default)
     materials: dict[str, MaterialConfig] = Field(default_factory=dict)
     numerical: NumericalConfig = Field(default_factory=NumericalConfig)
+    refinement: RefinementConfig = Field(default_factory=RefinementConfig)
     absorbing_boundary: bool = False
 
     # Stack configuration (stored as kwargs until resolved)

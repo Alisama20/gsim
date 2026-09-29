@@ -22,6 +22,7 @@ from gsim.palace.models import (
     MeshConfig,
     NumericalConfig,
     PortConfig,
+    RefinementConfig,
     TerminalConfig,
     TwoTerminalPortConfig,
     WavePortConfig,
@@ -152,6 +153,7 @@ class PalaceSimMixin:
         - stack: LayerStack | None
         - materials: dict[str, MaterialConfig]
         - numerical: NumericalConfig
+        - refinement: RefinementConfig
         - _output_dir: Path | None (private)
         - _stack_kwargs: dict[str, Any] (private)
     """
@@ -161,6 +163,7 @@ class PalaceSimMixin:
     stack: LayerStack | None
     materials: dict[str, MaterialConfig]
     numerical: NumericalConfig
+    refinement: RefinementConfig
     driven: DrivenConfig
     eigenmode: EigenmodeConfig
     ports: list[PortConfig]
@@ -620,6 +623,55 @@ class PalaceSimMixin:
             solver_type=solver_type,
             preconditioner=preconditioner,
             device=device,
+        )
+
+    def set_refinement(
+        self,
+        *,
+        max_its: int = 0,
+        tol: float = 1e-2,
+        uniform_levels: int = 0,
+        max_dofs: int | None = None,
+        update_fraction: float | None = None,
+        nonconformal: bool | None = None,
+        max_nc_levels: int | None = None,
+        save_adapt_iterations: bool | None = None,
+        save_adapt_mesh: bool | None = None,
+    ) -> None:
+        """Configure Palace's adaptive mesh refinement (AMR).
+
+        Palace refines the elements that carry most of its estimated error and
+        re-solves, until the error norm falls below ``tol``, ``max_its``
+        passes have run, or the problem reaches ``max_dofs`` degrees of
+        freedom. See :class:`~gsim.palace.models.RefinementConfig`.
+
+        Args:
+            max_its: Maximum number of AMR passes. 0 disables AMR.
+            tol: Stop refining when the estimated error norm falls below this.
+            uniform_levels: Uniform refinement levels applied to the input
+                mesh before solving.
+            max_dofs: Maximum degrees of freedom. None means no limit.
+            update_fraction: Dörfler marking fraction, between 0 and 1.
+            nonconformal: Refine with hanging nodes instead of conformally.
+            max_nc_levels: Maximum nonconformal refinement levels; 0 means
+                no limit.
+            save_adapt_iterations: Keep the output of every pass in an
+                ``iterationX`` subdirectory.
+            save_adapt_mesh: Save the final adapted mesh.
+
+        Example:
+            >>> sim.set_refinement(max_its=5, tol=1e-3, max_dofs=2_000_000)
+        """
+        self.refinement = RefinementConfig(
+            max_its=max_its,
+            tol=tol,
+            uniform_levels=uniform_levels,
+            max_dofs=max_dofs,
+            update_fraction=update_fraction,
+            nonconformal=nonconformal,
+            max_nc_levels=max_nc_levels,
+            save_adapt_iterations=save_adapt_iterations,
+            save_adapt_mesh=save_adapt_mesh,
         )
 
     # -------------------------------------------------------------------------
@@ -1957,6 +2009,7 @@ class PalaceSimMixin:
             eigenmode_config=self.eigenmode,
             driven_config=self.driven,
             numerical_config=self.numerical,
+            refinement_config=self.refinement,
             boundary_mode_config=getattr(self, "boundary_mode", None),
             absorbing_boundary=self.absorbing_boundary,
             hints=hints,

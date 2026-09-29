@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         EigenmodeConfig,
         ElectrostaticConfig,
         NumericalConfig,
+        RefinementConfig,
     )
     from gsim.palace.models.ports import TerminalConfig
     from gsim.palace.ports.config import PalacePort
@@ -135,6 +136,7 @@ def generate_palace_config(
     hints: dict[str, Any] | None = None,
     electrostatic_config: ElectrostaticConfig | None = None,
     terminals: list[TerminalConfig] | None = None,
+    refinement_config: RefinementConfig | None = None,
 ) -> Path:
     """Generate Palace config.json file.
 
@@ -153,11 +155,17 @@ def generate_palace_config(
         absorbing_boundary: Whether to add absorbing (PML) boundary
         periodic_axis: Optional periodic axis identifier
         hints: Additional config hints merged into the JSON
+        refinement_config: Optional RefinementConfig for adaptive mesh
+            refinement. Defaults to AMR off.
 
     Returns:
         Path to the generated config.json
     """
+    from gsim.palace.models import RefinementConfig
     from gsim.palace.ports.config import PortGeometry
+
+    if refinement_config is None:
+        refinement_config = RefinementConfig()
 
     if simulation_type not in (
         "driven",
@@ -260,11 +268,7 @@ def generate_palace_config(
         "Model": {
             "Mesh": f"{model_name}.msh",
             "L0": model_l0,  # um
-            "Refinement": {
-                "UniformLevels": 0,
-                "Tol": 1e-2,
-                "MaxIts": 0,
-            },
+            "Refinement": refinement_config.to_palace_config(),
         },
         "Solver": solver_conf,
     }
@@ -861,6 +865,7 @@ def write_config(
     hints: dict[str, Any] | None = None,
     electrostatic_config: ElectrostaticConfig | None = None,
     terminals: list[TerminalConfig] | None = None,
+    refinement_config: RefinementConfig | None = None,
 ) -> Path:
     """Write Palace config.json from a MeshResult.
 
@@ -910,6 +915,7 @@ def write_config(
         hints=hints,
         electrostatic_config=electrostatic_config,
         terminals=terminals,
+        refinement_config=refinement_config,
     )
 
     # Update the mesh_result with the config path
