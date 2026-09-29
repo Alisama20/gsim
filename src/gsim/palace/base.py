@@ -1503,6 +1503,22 @@ class PalaceSimMixin:
         print(f"  Conductor surfaces:{len(bdr_conductors)}")  # noqa: T201
         print(f"  Interface surfaces:{len(bdr_interfaces)}")  # noqa: T201
 
+        # The domain regions hold the volume elements in 3D and the surface
+        # elements in 2D meshes, where there are no volume groups.
+        physical = stats.get("groups", {})
+        regions = [g for g in physical.get("volumes", []) if g.get("elements")] or [
+            g for g in physical.get("surfaces", []) if g.get("elements")
+        ]
+        region_total = sum(g["elements"] for g in regions)
+        if region_total:
+            print("  Elements by region:")  # noqa: T201
+            for g in sorted(regions, key=lambda g: g["elements"], reverse=True):
+                share = 100 * g["elements"] / region_total
+                line = f"    {g['name']:<24}{g['elements']:>12,}  {share:5.1f}%"
+                if edges := g.get("edge_length"):
+                    line += f"  edges {edges['min']:.3g}-{edges['max']:.3g} um"
+                print(line)  # noqa: T201
+
         if elements and not tets:
             p = 2
             nd_dofs_est = elements * p * (p + 1)
