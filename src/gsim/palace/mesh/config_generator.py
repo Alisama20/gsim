@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import gmsh
+import numpy as np
 
 from gsim.palace.ports.config import PortType
 
@@ -831,12 +832,29 @@ def collect_mesh_stats() -> dict:
         except Exception:
             pass
 
-    # Get physical groups with tags
+    # Get physical groups with tags and the elements each one holds
     try:
         groups = {"volumes": [], "surfaces": []}
         for dim, tag in gmsh.model.getPhysicalGroups():
             name = gmsh.model.getPhysicalName(dim, tag)
-            entry = {"name": name, "tag": tag}
+            group_tags = np.concatenate(
+                [
+                    tags
+                    for entity in gmsh.model.getEntitiesForPhysicalGroup(dim, tag)
+                    for tags in gmsh.model.mesh.getElements(dim, entity)[1]
+                ]
+                or [np.empty(0, dtype=np.uint64)]
+            )
+            entry = {"name": name, "tag": tag, "elements": len(group_tags)}
+            if len(group_tags):
+                entry["edge_length"] = {
+                    "min": float(
+                        min(gmsh.model.mesh.getElementQualities(group_tags, "minEdge"))
+                    ),
+                    "max": float(
+                        max(gmsh.model.mesh.getElementQualities(group_tags, "maxEdge"))
+                    ),
+                }
             if dim == 3:
                 groups["volumes"].append(entry)
             elif dim == 2:
