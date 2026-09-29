@@ -783,11 +783,14 @@ def collect_mesh_stats() -> dict:
         total_elements = sum(len(tags) for tags in element_tags)
         stats["elements"] = total_elements
 
-        # Count tetrahedra (type 4) and save tags
+        # Count tetrahedra of any order and save tags: a 10-, 20-, ... node
+        # tetrahedron of a high-order mesh has four corners, like the 4-node one
         for etype, tags in zip(element_types, element_tags, strict=False):
-            if etype == 4:  # 4-node tetrahedron
-                stats["tetrahedra"] = len(tags)
-                tet_tags = list(tags)
+            _, dim, _, _, _, corners = gmsh.model.mesh.getElementProperties(etype)
+            if dim == 3 and corners == 4:
+                tet_tags.extend(tags)
+        if tet_tags:
+            stats["tetrahedra"] = len(tet_tags)
     except Exception:
         pass
 
