@@ -32,6 +32,7 @@ from gsim.palace.models.results import (
     ValidationResult,
     format_field_dofs,
     format_mesh_distortion,
+    mesh_identity_lines,
 )
 
 if TYPE_CHECKING:
@@ -1590,6 +1591,9 @@ class PalaceSimMixin:
             print(f"  Est. ND-space DOFs (order {p}):  ~{nd_dofs_est:,}")  # noqa: T201
             print(f"  Est. H1-space DOFs (order {p}):  ~{h1_dofs_est:,}")  # noqa: T201
             print(f"  Est. total DOFs:                  ~{nd_dofs_est + h1_dofs_est:,}")  # noqa: T201
+
+        for line in mesh_identity_lines(stats):
+            print(f"  {line}")  # noqa: T201
 
     def _get_ports_for_preview(self, stack: LayerStack) -> list:
         """Get ports for preview."""

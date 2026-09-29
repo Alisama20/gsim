@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import gmsh
 import numpy as np
 
+from gsim.palace.mesh.gmsh_utils import gmsh_options, mesh_hash
 from gsim.palace.mesh.metadata import (
     tetrahedral_topology,
     update_field_dofs,
@@ -766,6 +767,9 @@ def collect_mesh_stats(*, field_order: int = 2, problem_type: str = "driven") ->
         - field_dofs: Estimated Field DOFs before Palace preprocessing
         - edge_length: Min/max edge lengths
         - groups: Physical group info
+        - mesh_hash: Hash of the mesh that ignores node and element numbering
+        - versions: gsim and Gmsh versions
+        - gmsh_options: Effective Gmsh options that shape the mesh
     """
     stats = {}
 
@@ -916,6 +920,21 @@ def collect_mesh_stats(*, field_order: int = 2, problem_type: str = "driven") ->
         stats["groups"] = groups
     except Exception:
         pass
+
+    # Identify the mesh independently of node and element numbering, and record
+    # what produced it, so meshes from different runs and hosts can be compared.
+    try:
+        import gsim
+
+        stats["versions"] = {"gsim": gsim.__version__, "gmsh": gmsh.__version__}
+        stats["gmsh_options"] = gmsh_options()
+    except Exception:
+        pass
+    try:
+        if digest := mesh_hash():
+            stats["mesh_hash"] = digest
+    except Exception as error:
+        logger.warning("Could not hash the mesh: %s", error)
 
     return stats
 

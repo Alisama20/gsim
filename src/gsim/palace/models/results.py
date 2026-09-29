@@ -80,6 +80,37 @@ class ValidationResult(BaseModel):
         return "\n".join(lines)
 
 
+def mesh_identity_lines(stats: dict) -> list[str]:
+    """Describe the mesh hash and the mesher settings recorded in mesh stats.
+
+    Returns no lines when the stats carry no hash.
+    """
+    digest = stats.get("mesh_hash")
+    if not digest:
+        return []
+    versions = stats.get("versions", {})
+    lines = [
+        f"{'Mesh hash:':<12}{digest[:23]}  "
+        f"(gmsh {versions.get('gmsh', '?')}, gsim {versions.get('gsim', '?')})"
+    ]
+    options = stats.get("gmsh_options", {})
+    mesher = []
+    if "Mesh.Algorithm" in options:
+        mesher.append(f"2D algorithm {options['Mesh.Algorithm']:g}")
+    if "Mesh.Algorithm3D" in options:
+        mesher.append(f"3D algorithm {options['Mesh.Algorithm3D']:g}")
+    if "General.NumThreads" in options:
+        limits = "/".join(
+            f"{options.get(f'Mesh.MaxNumThreads{d}D', 0):g}" for d in (1, 2, 3)
+        )
+        mesher.append(
+            f"threads {options['General.NumThreads']:g} (1D/2D/3D limits {limits})"
+        )
+    if mesher:
+        lines.append(f"{'Mesher:':<12}{', '.join(mesher)}")
+    return lines
+
+
 class SimulationResult(BaseModel):
     """Result from running a Palace simulation.
 
@@ -169,6 +200,9 @@ class SimulationResult(BaseModel):
             if field_dofs := format_field_dofs(self.mesh_stats):
                 lines.append(field_dofs)
 
+            # Identity of the mesh: hash and the mesher that made it
+            lines.extend(mesh_identity_lines(self.mesh_stats))
+
             # Physical groups
             groups = self.mesh_stats.get("groups", {})
             if groups:
@@ -203,4 +237,5 @@ class SimulationResult(BaseModel):
 __all__ = [
     "SimulationResult",
     "ValidationResult",
+    "mesh_identity_lines",
 ]
