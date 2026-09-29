@@ -74,6 +74,24 @@
         - validate_config
         - validate_mesh
         - run
+        - load_capacitance
+
+## Capacitance
+
+::: gsim.palace.CapacitanceMatrices
+    options:
+      show_source: false
+      inherited_members: false
+      members:
+        - between
+        - to_ground
+        - maxwell_frame
+        - mutual_frame
+        - problems
+
+::: gsim.palace.load_capacitance
+    options:
+      show_source: false
 
 ## Mesh
 

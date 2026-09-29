@@ -55,6 +55,9 @@ from gsim.gcloud import run_simulation as _run_simulation
 
 # New simulation classes (composition, no inheritance)
 from gsim.palace.boundarymode import BoundaryModeSim
+
+# Capacitance matrices of electrostatic runs
+from gsim.palace.capacitance import CapacitanceMatrices, load_capacitance
 from gsim.palace.driven import DrivenSim
 from gsim.palace.eigenmode import EigenmodeSim
 from gsim.palace.electrostatic import ElectrostaticSim
@@ -162,6 +165,7 @@ __all__ = [
     "BoundaryModeConfig",
     "BoundaryModeSim",
     "CPWPortConfig",
+    "CapacitanceMatrices",
     "CrossSectionPlaneConfig",
     "DrivenConfig",
     "DrivenSim",
@@ -221,6 +225,7 @@ __all__ = [
     "install_palace_runtime",
     "interactive_mode",
     "load_boundary_field_data",
+    "load_capacitance",
     "load_field_context",
     "load_fields",
     "load_sparams",
