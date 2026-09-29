@@ -65,6 +65,7 @@
         - set_material
         - set_numerical
         - add_terminal
+        - nets
         - add_pec
         - mesh
         - plot_mesh
@@ -127,6 +128,26 @@ as infinite and stored as `max=None` with a nonzero `singular_elements` count.
         - fine
 
 ::: gsim.palace.generate_mesh
+    options:
+      show_source: false
+
+## Nets
+
+::: gsim.palace.Nets
+    options:
+      show_source: false
+      inherited_members: false
+      members:
+        - net_at
+
+::: gsim.palace.Net
+    options:
+      show_source: false
+      inherited_members: false
+      members:
+        - layers
+
+::: gsim.palace.extract_nets
     options:
       show_source: false
 

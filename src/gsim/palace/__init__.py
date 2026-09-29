@@ -93,6 +93,7 @@ from gsim.palace.mesh import (
     MeshResult,
     generate_mesh,
 )
+from gsim.palace.mesh.nets import Net, Nets, extract_nets
 from gsim.palace.mesh.validation import check_lumped_port_contact
 
 # Models (new submodule)
@@ -182,6 +183,8 @@ __all__ = [
     "MaterialProperties",
     "MeshConfig",
     "MeshResult",
+    "Net",
+    "Nets",
     "NumericalConfig",
     "PECBlockConfig",
     "PalacePort",
@@ -216,6 +219,7 @@ __all__ = [
     "extract_boundary_cells",
     "extract_from_pdk",
     "extract_layer_stack",
+    "extract_nets",
     "extract_plane_slice",
     "extract_ports",
     "extract_slice_contours",
