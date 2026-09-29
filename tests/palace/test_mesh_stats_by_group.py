@@ -137,6 +137,25 @@ def test_print_mesh_stats_falls_back_to_surfaces_for_2d_meshes(capsys) -> None:
     assert "66.7%" in out
 
 
+def test_print_mesh_stats_skips_the_region_table_when_no_group_has_elements(
+    capsys,
+) -> None:
+    """Empty groups give nothing to tabulate, and no share of a zero total."""
+    out = _print_stats(
+        {
+            "elements": 10,
+            "tetrahedra": 8,
+            "groups": {
+                "volumes": [{"name": "air", "tag": 1, "elements": 0}],
+                "surfaces": [],
+            },
+        },
+        capsys,
+    )
+    assert "Tetrahedra: 8" in out
+    assert "Elements by region" not in out
+
+
 def test_empty_group_does_not_hide_the_others() -> None:
     """A group with no elements reports 0 and the other groups still appear."""
     gmsh.initialize()
