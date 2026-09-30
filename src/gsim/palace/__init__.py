@@ -139,7 +139,9 @@ from gsim.palace.results import (
     SParams,
     get_port_map,
     load_fields,
+    load_refinement_history,
     load_sparams,
+    refinement_convergence,
 )
 
 # Runtime / binary resolution (self-contained; can auto-download a Palace CPU runtime)
@@ -227,6 +229,7 @@ __all__ = [
     "load_boundary_field_data",
     "load_field_context",
     "load_fields",
+    "load_refinement_history",
     "load_sparams",
     "load_stack_yaml",
     "load_volume_field_data",
@@ -242,6 +245,7 @@ __all__ = [
     "print_job_summary",
     "print_stack",
     "print_stack_table",
+    "refinement_convergence",
     "resolve_boundary_type_attributes",
     "resolve_entity_attributes",
     "resolve_palace_binary",

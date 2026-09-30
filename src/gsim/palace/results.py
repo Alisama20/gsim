@@ -29,6 +29,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
@@ -263,6 +265,19 @@ class PalaceTextResults:
             mode_id = int(key.split("_", 1)[1])
             return self.modes[mode_id]
         raise KeyError(key)
+
+    @property
+    def error_indicators(self) -> dict[str, float] | None:
+        """Norm, minimum, maximum and mean of Palace's error indicator.
+
+        Read from ``error-indicators.csv``; None when Palace did not write it.
+        """
+        rows = self.csv_tables.get("error-indicators.csv")
+        if not rows:
+            return None
+        row = {str(k).strip(): v for k, v in rows[-1].items()}
+        columns = {"norm": "Norm", "min": "Minimum", "max": "Maximum", "mean": "Mean"}
+        return {key: self._to_float(row.get(column)) for key, column in columns.items()}
 
     def keys(self) -> list[str]:
         """Return available result file names."""
@@ -863,6 +878,78 @@ def load_text_results(source: str | Path | dict) -> PalaceTextResults:
         json_data=json_data,
         text_data=text_data,
     )
+
+
+def load_refinement_history(source: str | Path) -> list[PalaceTextResults]:
+    """Load the results of every adaptive mesh refinement pass, oldest first.
+
+    With ``SaveAdaptIterations``, Palace keeps the output of pass X in an
+    ``iterationX`` subdirectory and writes the last pass at the top level of
+    its output directory. A run without refinement gives a single pass.
+
+    Args:
+        source: Simulation path, or Palace output directory.
+
+    Returns:
+        One :class:`PalaceTextResults` per pass, the final one last.
+    """
+    base = Path(source)
+    passes: list[Path] = []
+    for root in (base, base / "output" / "palace", base / "output"):
+        passes = sorted(
+            (
+                d
+                for d in root.glob("iteration*")
+                if d.is_dir() and d.name.removeprefix("iteration").isdigit()
+            ),
+            key=lambda d: int(d.name.removeprefix("iteration")),
+        )
+        if passes:
+            break
+    return [load_text_results(d) for d in passes] + [load_text_results(base)]
+
+
+def refinement_convergence(
+    history: list[PalaceTextResults],
+    metric: Callable[[PalaceTextResults], float],
+) -> list[dict[str, float | int | None]]:
+    """Tabulate Palace's error estimate and a chosen metric, pass by pass.
+
+    Palace stops refining on its own error estimate, which does not mean that
+    a given quantity (a frequency, an S-parameter, a capacitance) has
+    converged. This lists both for each pass of :func:`load_refinement_history`.
+
+    The relative change of the metric between two passes is not its error:
+    if the changes shrink by a factor r per pass, the error left after the
+    last pass is roughly the last change times r / (1 - r).
+
+    Args:
+        history: Passes from :func:`load_refinement_history`.
+        metric: Function returning the quantity of interest for one pass.
+
+    Returns:
+        One row per pass with ``pass``, ``error_norm``, ``value`` and
+        ``relative_change``: None for the first pass, NaN after a pass where
+        the metric was zero.
+    """
+    table: list[dict[str, float | int | None]] = []
+    previous = None
+    for number, results in enumerate(history, start=1):
+        value = metric(results)
+        indicators = results.error_indicators or {}
+        change = None
+        if previous is not None:
+            change = (value - previous) / abs(previous) if previous else float("nan")
+        table.append(
+            {
+                "pass": number,
+                "error_norm": indicators.get("norm"),
+                "value": value,
+                "relative_change": change,
+            }
+        )
+        previous = value
+    return table
 
 
 def get_port_map(source: str | Path | dict) -> dict[int, str]:
