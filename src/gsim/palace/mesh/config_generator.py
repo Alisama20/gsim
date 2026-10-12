@@ -514,10 +514,6 @@ def generate_palace_config(
         lumped_ports: list[dict[str, object]] = []
         wave_ports: list[dict[str, object]] = []
         port_idx = 1
-        # Passive reactive ports are appended after all primary ports are assigned
-        # indices so that their synthetic indices never clash.  We collect them here
-        # and append them to lumped_ports once the primary loop finishes.
-        passive_reactive_ports: list[dict[str, object]] = []
 
         for port in ports:
             if simulation_type != "driven":
@@ -554,45 +550,40 @@ def generate_palace_config(
                             else port.direction.upper()
                         )
 
-                        has_reactive = (
+                        has_element = (
                             port.resistance is not None
                             or (port.inductance is not None and port.inductance > 0)
                             or (port.capacitance is not None and port.capacitance > 0)
                         )
 
-                        if simulation_type == "driven" and has_reactive:
-                            # Driven simulations forbid L/C on excited ports.
-                            # Emit the excited port with only R=impedance, then a
-                            # separate passive (Active: false) lumped port carrying
-                            # the reactive parameters on the same boundary surface.
-                            # Palace allows shared attributes when Active is false.
-                            port_entry: dict[str, object] = {
-                                "Index": port_idx,
-                                "R": port.impedance,
-                                "Direction": direction,
-                                "Excitation": port_idx if port.excited else False,
-                                "Attributes": [port_group["phys_group"]],
-                            }
-                            lumped_ports.append(port_entry)
-
-                            reactive_entry: dict[str, object] = {
-                                # Placeholder index - will be replaced after the
-                                # primary loop assigns all port_idx values.
-                                "Index": None,
-                                "Direction": direction,
-                                "Attributes": [port_group["phys_group"]],
-                                "Active": False,
-                            }
-                            if port.resistance is not None:
-                                reactive_entry["R"] = port.resistance
-                            if port.inductance is not None and port.inductance > 0:
-                                reactive_entry["L"] = port.inductance
-                            if port.capacitance is not None and port.capacitance > 0:
-                                reactive_entry["C"] = port.capacitance
-                            passive_reactive_ports.append(reactive_entry)
+                        if simulation_type == "driven" and port.excited:
+                            # Palace forbids L/C on an excited driven port and rejects
+                            # a second active port on the same surface, while an
+                            # inactive one ("Active": false) is skipped by the solver.
+                            # So element values on an excited port cannot be honoured:
+                            # say so instead of writing an entry Palace ignores.
+                            if has_element:
+                                logger.warning(
+                                    "Port %s is excited in a driven simulation: its "
+                                    "resistance/inductance/capacitance are not "
+                                    "supported by Palace and are ignored; only "
+                                    "R = impedance (%s ohm) is used. Put the element "
+                                    "on a separate non-excited port.",
+                                    port_idx,
+                                    port.impedance,
+                                )
+                            lumped_ports.append(
+                                {
+                                    "Index": port_idx,
+                                    "R": port.impedance,
+                                    "Direction": direction,
+                                    "Excitation": port_idx,
+                                    "Attributes": [port_group["phys_group"]],
+                                }
+                            )
                         else:
-                            # Eigenmode (or non-excited driven port): R/L/C on the
-                            # same port entry is supported.
+                            # Eigenmode, or non-excited driven port: R/L/C go on
+                            # this one (active) entry, which Palace applies.
                             eigenmode_entry: dict[str, object] = {
                                 "Index": port_idx,
                                 "Direction": direction,
@@ -639,14 +630,6 @@ def generate_palace_config(
                             wave_port_entry["Verbose"] = port.eigensolver_verbose
                         wave_ports.append(wave_port_entry)
             port_idx += 1
-
-        # Assign unique indices to passive reactive ports now that all primary
-        # indices are consumed (port_idx is one past the last primary index).
-        synthetic_idx = port_idx
-        for entry in passive_reactive_ports:
-            entry["Index"] = synthetic_idx
-            synthetic_idx += 1
-        lumped_ports.extend(passive_reactive_ports)
 
         boundaries: dict[str, Any] = {
             "Conductivity": conductors,
