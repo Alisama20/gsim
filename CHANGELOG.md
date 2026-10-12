@@ -2,10 +2,10 @@
 
 ## Unreleased
 
-- Driven simulations keep the R/L/C of non-excited lumped ports ([#354](https://github.com/gdsfactory/gsim/issues/354)):
-  they are written on the port's own active entry instead of a second `"Active": false` entry, which Palace skips.
-  Elements on an excited driven port, which Palace does not support, now log a warning instead of being dropped
-  silently.
+- Driven simulations keep the R/L/C of lumped ports ([#354](https://github.com/gdsfactory/gsim/issues/354)): they are
+  written on the port's own active entry, on excited ports too, instead of a second `"Active": false` entry, which
+  Palace skips. On an excited port a `resistance` different from `impedance` logs a warning, since Palace uses one R as
+  both reference impedance and element resistance.
 
 - `BoundaryModeSim` owns its run and its postprocessing paths. `add_impedance_path(name, voltage=..., current=...)`
   declares the line integrals Palace evaluates on a solved Mode and returns the index the impedance is reported under;

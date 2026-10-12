@@ -276,30 +276,39 @@ def test_driven_capacitor_port_has_no_default_resistance(tmp_path, cpw_component
     assert p1.get("Active", True)
 
 
-def test_driven_excited_port_elements_are_reported(tmp_path, cpw_component, caplog):
-    """Elements on an excited driven port can't reach Palace: warn, don't hide them.
+def test_driven_excited_port_keeps_its_reactance(tmp_path, cpw_component):
+    """An excited driven port carries its L/C on its own entry; Palace applies them."""
+    ports = _driven_lumped_ports(
+        tmp_path,
+        cpw_component,
+        "palace-sim-excited",
+        impedance=50.0,
+        inductance=10e-9,
+        capacitance=1e-15,
+    )
+    assert len(ports) == 2
+    assert all(port.get("Active", True) for port in ports)
+    p1 = next(port for port in ports if port["Index"] == 1)
+    assert p1["Excitation"] == 1
+    assert (p1["R"], p1["L"], p1["C"]) == (50.0, 10e-9, 1e-15)
 
-    Palace forbids L/C on an excited driven port and ignores inactive ports, so
-    the config keeps only R = impedance and no ``"Active": false`` entry.
-    """
+
+def test_driven_excited_port_separate_resistance_is_reported(
+    tmp_path, cpw_component, caplog
+):
+    """An excited port's R is its reference impedance: a different resistance warns."""
     with caplog.at_level("WARNING", logger="gsim.palace.mesh.config_generator"):
         ports = _driven_lumped_ports(
             tmp_path,
             cpw_component,
-            "palace-sim-excited",
+            "palace-sim-excited-r",
             impedance=50.0,
             resistance=2.5,
-            inductance=10e-9,
             capacitance=1e-15,
         )
-    assert len(ports) == 2
-    assert all(port.get("Active", True) for port in ports)
     p1 = next(port for port in ports if port["Index"] == 1)
-    assert p1["R"] == 50.0
-    assert p1["Excitation"] == 1
-    assert "L" not in p1
-    assert "C" not in p1
-    assert "not supported by Palace and are ignored" in caplog.text
+    assert (p1["R"], p1["C"]) == (50.0, 1e-15)
+    assert "resistance=2.5 is ignored" in caplog.text
 
 
 # ---------------------------------------------------------------------------

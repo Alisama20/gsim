@@ -550,65 +550,47 @@ def generate_palace_config(
                             else port.direction.upper()
                         )
 
-                        has_element = (
-                            port.resistance is not None
-                            or (port.inductance is not None and port.inductance > 0)
-                            or (port.capacitance is not None and port.capacitance > 0)
-                        )
-
+                        # One entry per port carries R/L/C; Palace applies them in
+                        # parallel, on excited ports too. A second entry on the same
+                        # surface would have to be "Active": false, and Palace skips
+                        # inactive ports altogether (#354).
+                        entry: dict[str, object] = {
+                            "Index": port_idx,
+                            "Direction": direction,
+                            "Excitation": port_idx if port.excited else False,
+                            "Attributes": [port_group["phys_group"]],
+                        }
+                        has_reactive = (
+                            port.inductance is not None and port.inductance > 0
+                        ) or (port.capacitance is not None and port.capacitance > 0)
                         if simulation_type == "driven" and port.excited:
-                            # Palace forbids L/C on an excited driven port and rejects
-                            # a second active port on the same surface, while an
-                            # inactive one ("Active": false) is skipped by the solver.
-                            # So element values on an excited port cannot be honoured:
-                            # say so instead of writing an entry Palace ignores.
-                            if has_element:
+                            # An excited port's R is also its reference impedance,
+                            # so a separate element resistance cannot be represented.
+                            if (
+                                port.resistance is not None
+                                and port.resistance != port.impedance
+                            ):
                                 logger.warning(
-                                    "Port %s is excited in a driven simulation: its "
-                                    "resistance/inductance/capacitance are not "
-                                    "supported by Palace and are ignored; only "
-                                    "R = impedance (%s ohm) is used. Put the element "
-                                    "on a separate non-excited port.",
+                                    "Port %s is excited: Palace uses one R as both "
+                                    "the reference impedance and the element "
+                                    "resistance, so resistance=%s is ignored and "
+                                    "R = impedance (%s ohm) is used.",
                                     port_idx,
+                                    port.resistance,
                                     port.impedance,
                                 )
-                            lumped_ports.append(
-                                {
-                                    "Index": port_idx,
-                                    "R": port.impedance,
-                                    "Direction": direction,
-                                    "Excitation": port_idx,
-                                    "Attributes": [port_group["phys_group"]],
-                                }
-                            )
-                        else:
-                            # Eigenmode, or non-excited driven port: R/L/C go on
-                            # this one (active) entry, which Palace applies.
-                            eigenmode_entry: dict[str, object] = {
-                                "Index": port_idx,
-                                "Direction": direction,
-                                "Excitation": port_idx if port.excited else False,
-                                "Attributes": [port_group["phys_group"]],
-                            }
-                            # A port carrying reactive elements (e.g. a lumped
-                            # Josephson junction modelled as L/C) is a pure
-                            # reactive termination. The default 50 Ohm impedance
-                            # must not be emitted in parallel with it, otherwise
-                            # it would load the junction. Only emit R from the
-                            # default impedance when the port is purely
-                            # resistive, unless a resistance is set explicitly.
-                            has_reactive = (
-                                port.inductance is not None and port.inductance > 0
-                            ) or (port.capacitance is not None and port.capacitance > 0)
-                            if port.resistance is not None:
-                                eigenmode_entry["R"] = port.resistance
-                            elif port.impedance and not has_reactive:
-                                eigenmode_entry["R"] = port.impedance
-                            if port.inductance is not None and port.inductance > 0:
-                                eigenmode_entry["L"] = port.inductance
-                            if port.capacitance is not None and port.capacitance > 0:
-                                eigenmode_entry["C"] = port.capacitance
-                            lumped_ports.append(eigenmode_entry)
+                            entry["R"] = port.impedance
+                        elif port.resistance is not None:
+                            entry["R"] = port.resistance
+                        elif port.impedance and not has_reactive:
+                            # A purely reactive termination (e.g. a junction as
+                            # L/C) must not get the default impedance in parallel.
+                            entry["R"] = port.impedance
+                        if port.inductance is not None and port.inductance > 0:
+                            entry["L"] = port.inductance
+                        if port.capacitance is not None and port.capacitance > 0:
+                            entry["C"] = port.capacitance
+                        lumped_ports.append(entry)
 
                     elif port.port_type == PortType.WAVEPORT:
                         wave_port_entry: dict[str, object] = {
