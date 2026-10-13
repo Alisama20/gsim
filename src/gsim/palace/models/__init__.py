@@ -51,6 +51,7 @@ from gsim.palace.models.solver import (
     SolverConfig,
 )
 from gsim.palace.models.stack import MaterialConfig
+from gsim.palace.models.symmetry import SymmetryPlaneConfig
 
 __all__ = [
     "BoundaryModeConfig",
@@ -77,6 +78,7 @@ __all__ = [
     "RefinementConfig",
     "SimulationResult",
     "SolverConfig",
+    "SymmetryPlaneConfig",
     "TerminalConfig",
     "TransientConfig",
     "TwoTerminalPortConfig",
