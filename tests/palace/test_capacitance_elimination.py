@@ -123,7 +123,9 @@ def test_pairs_lists_electrode_pairs_and_ground_separately() -> None:
     table = cap.pairs()
     assert list(table.columns) == ["first", "second", "capacitance_F"]
     assert len(table) == 3 + 3  # three pairs, three grounds
-    rows = {(r.first, r.second): r.capacitance_F for r in table.itertuples()}
+    rows = {
+        (r["first"], r["second"]): r["capacitance_F"] for r in table.to_dict("records")
+    }
     for a, b in [("T1", "T2"), ("T1", "T3"), ("T2", "T3")]:
         assert rows[(a, b)] == cap.between(a, b)
     for name in cap.terminals:
@@ -134,7 +136,9 @@ def test_pairs_lists_electrode_pairs_and_ground_separately() -> None:
 
 def test_pairs_of_one_terminal_is_only_its_ground() -> None:
     table = _three_plates().eliminate(["T1", "T3"]).pairs()
-    assert [(r.first, r.second) for r in table.itertuples()] == [("T2", "ground")]
+    assert [(r["first"], r["second"]) for r in table.to_dict("records")] == [
+        ("T2", "ground")
+    ]
 
 
 # ----- ElectrostaticSim.load_capacitance -----------------------------------------

@@ -11,6 +11,12 @@ from gsim.palace.models import TerminalConfig
 # ----- TerminalConfig ---------------------------------------------------------
 
 
+def _area(terminal: TerminalConfig) -> float:
+    polygon = terminal.region_polygon()
+    assert polygon is not None
+    return polygon.area
+
+
 def test_layer_terminal_is_still_valid() -> None:
     terminal = TerminalConfig(name="T1", layer="m5")
     assert terminal.layer == "m5"
@@ -34,17 +40,17 @@ def test_region_box_terminal_is_valid() -> None:
     terminal = TerminalConfig(name="L", region=(0, 0, 20, 20), layer="m1")
     assert terminal.region == (0, 0, 20, 20)
     assert terminal.layer == "m1"
-    assert terminal.region_polygon().area == pytest.approx(400.0)
+    assert _area(terminal) == pytest.approx(400.0)
 
 
 def test_region_polygon_terminal_is_valid() -> None:
     terminal = TerminalConfig(name="L", region=[(0, 0), (4, 0), (0, 3)])
-    assert terminal.region_polygon().area == pytest.approx(6.0)
+    assert _area(terminal) == pytest.approx(6.0)
 
 
 def test_region_box_given_as_a_list_is_a_box() -> None:
     terminal = TerminalConfig(name="L", region=[0, 0, 2, 5])
-    assert terminal.region_polygon().area == pytest.approx(10.0)
+    assert _area(terminal) == pytest.approx(10.0)
 
 
 def test_floating_flag_is_kept() -> None:
