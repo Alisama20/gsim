@@ -1,5 +1,7 @@
 # gsim 0.7.0
 
+[![codecov](https://codecov.io/gh/gdsfactory/gsim/branch/main/graph/badge.svg)](https://codecov.io/gh/gdsfactory/gsim)
+
 > Electromagnetic simulation for photonics and electronics, powered by [GDSFactory+](https://gdsfactory.com)
 
 ![gsim-logo](./docs/assets/img/gsim-small.png)

@@ -1,5 +1,7 @@
 # gsim
 
+[![codecov](https://codecov.io/gh/gdsfactory/gsim/branch/main/graph/badge.svg)](https://codecov.io/gh/gdsfactory/gsim)
+
 Photonic FDTD and RF/microwave simulation for GDSFactory, powered by [GDSFactory+](https://gdsfactory.com).
 
 | Engine                            | Status and use                                                                    |
