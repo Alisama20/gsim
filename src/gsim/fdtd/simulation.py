@@ -332,6 +332,7 @@ class Simulation:
         config_path.write_text(
             config.model_dump_json(indent=2, exclude_none=True) + "\n",
             encoding="utf8",
+            newline="\n",
         )
         return SimulationArtifacts(
             mesh_path=mesh_path,

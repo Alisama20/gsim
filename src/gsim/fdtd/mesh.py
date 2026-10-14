@@ -51,6 +51,20 @@ def _restore_gmsh_options(option_values: Mapping[str, float]) -> None:
         gmsh.option.setNumber(option_name, value)
 
 
+def _force_lf_line_endings(path: Path) -> None:
+    """Rewrite an ASCII file with LF line endings.
+
+    Gmsh writes ASCII meshes in text mode, so they come out CRLF on Windows.
+    The FDTD solver's MSH reader only accepts LF.
+
+    ASCII only: this relies on ``generate_mesh`` setting ``Mesh.Binary = 0``.
+    On a binary mesh it would corrupt any data bytes that happen to be CRLF.
+    """
+    content = path.read_bytes()
+    if b"\r\n" in content:
+        path.write_bytes(content.replace(b"\r\n", b"\n"))
+
+
 def _priority_by_mesh_order(
     layers: Mapping[str, ResolvedLayer],
 ) -> dict[str, int]:
@@ -362,6 +376,7 @@ def generate_mesh(
         gmsh.model.mesh.generate(3)
         _validate_material_entity_mesh(layer_volume_tags, geometry_tolerance_nm)
         gmsh.write(str(mesh_path))
+        _force_lf_line_endings(mesh_path)
     except FDTDGeometryError:
         raise
     except Exception as error:

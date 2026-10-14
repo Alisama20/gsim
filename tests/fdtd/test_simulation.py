@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+import gmsh
 import meshio
 import numpy as np
 import pytest
 
 from gsim import fdtd
 from gsim.fdtd.models import FDTDConfigError, FDTDGeometryError
+from gsim.fdtd.simulation import ArtifactSimulation
 
 
 def _physical_group_points(mesh: meshio.Mesh, name: str, cell_type: str) -> np.ndarray:
@@ -106,6 +109,35 @@ def test_write_uses_project_material_then_fallback_and_valid_mesh(
 
     mesh_header = artifacts.mesh_path.read_text(encoding="utf8").splitlines()
     assert mesh_header[mesh_header.index("$MeshFormat") + 1] == "2.2 0 8"
+
+
+@pytest.mark.parametrize("simulation_class", [fdtd.Simulation, ArtifactSimulation])
+def test_write_uses_lf_line_endings(
+    tmp_path, fdtd_pdk_module, monkeypatch, simulation_class
+) -> None:
+    """The cloud solver crashes on CRLF meshes, so Windows output must be LF."""
+    gmsh_write = gmsh.write
+
+    def write_like_windows(path: str) -> None:
+        # Gmsh already writes CRLF on Windows; force it on every platform.
+        gmsh_write(path)
+        mesh_path = Path(path)
+        content = mesh_path.read_bytes().replace(b"\r\n", b"\n")
+        mesh_path.write_bytes(content.replace(b"\n", b"\r\n"))
+
+    monkeypatch.setattr(gmsh, "write", write_like_windows)
+    simulation = simulation_class(
+        pdk=fdtd_pdk_module,
+        mesh_size_nm=750,
+        default_port="o1",
+    )
+    simulation.geometry("straight", settings={"length": 2.0})
+
+    artifacts = simulation.write(tmp_path)
+
+    # The config check only bites on the Windows CI runner.
+    assert b"\r" not in artifacts.mesh_path.read_bytes()
+    assert b"\r" not in artifacts.config_path.read_bytes()
 
 
 def test_write_requires_geometry(tmp_path) -> None:

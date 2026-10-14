@@ -307,6 +307,7 @@ class Simulation(CloudWorkflowMixin, RuntimeConfigMixin):
         config_path.write_text(
             config.model_dump_json(indent=2, exclude_none=True) + "\n",
             encoding="utf8",
+            newline="\n",
         )
         self._last_artifacts = SimulationArtifacts(
             mesh_path=mesh_path,
