@@ -322,6 +322,44 @@ class TestWaitForResultsSingle:
         assert "ETA 2m 00s" in output
         assert mock_monotonic.called
 
+    @patch("gsim.gcloud._output_mode", new=lambda: "pipe")
+    def test_status_display_never_moves_backwards(self, capsys):
+        """Progress rises through queued, starting and running (issue #340)."""
+        from gsim.gcloud import _print_status_table
+
+        shown: dict[str, int] = {}
+        percents = []
+        for status in (SimStatus.QUEUED, SimStatus.STARTING, SimStatus.RUNNING):
+            job = FakeJob(job_name="meep-progress", status=status)
+            _print_status_table(
+                {"job-1": job}, {"job-1": 0.0}, final=True, shown_progress=shown
+            )
+            percents.append(shown["job-1"])
+
+        output = capsys.readouterr().out
+        assert percents == [15, 30, 50]
+        assert "starting" in output
+
+    @patch("gsim.gcloud._output_mode", new=lambda: "pipe")
+    @patch("gsim.gcloud.time.monotonic", return_value=30.0)
+    def test_running_estimate_does_not_undercut_startup(self, mock_monotonic, capsys):
+        """An early running estimate below the startup value holds the bar."""
+        from gsim.gcloud import _print_status_table
+
+        shown = {"job-1": 30}
+        job = FakeJob(job_name="meep-progress", status=SimStatus.RUNNING)
+        _print_status_table(
+            {"job-1": job},
+            {"job-1": 0.0},
+            final=True,
+            estimated_runtime_seconds=300.0,
+            shown_progress=shown,
+        )
+
+        assert shown["job-1"] == 30
+        assert mock_monotonic.called
+        assert " 30%" in capsys.readouterr().out
+
     @patch("gsim.gcloud.sim")
     def test_already_completed(self, mock_sim, tmp_path):
         """Completed job downloads and parses results immediately."""
