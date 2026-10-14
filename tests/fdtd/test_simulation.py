@@ -107,6 +107,11 @@ def test_write_uses_project_material_then_fallback_and_valid_mesh(
     assert port_points[:, 2].max() == pytest.approx(220)
     assert len(_internal_horizontal_boundary_faces(mesh, "core")) == 0
 
+    background_points = _physical_group_points(mesh, "background", "tetra")
+    non_pml_bounds = document["grid"]["non_pml_bounds"]
+    assert non_pml_bounds["min"] == pytest.approx(background_points.min(axis=0))
+    assert non_pml_bounds["max"] == pytest.approx(background_points.max(axis=0))
+
     mesh_header = artifacts.mesh_path.read_text(encoding="utf8").splitlines()
     assert mesh_header[mesh_header.index("$MeshFormat") + 1] == "2.2 0 8"
 
@@ -167,6 +172,12 @@ def test_explicit_domain_bounds_set_background_box(
 
     assert background_points.min(axis=0) == pytest.approx([0.0, -500.0, -400.0])
     assert background_points.max(axis=0) == pytest.approx([2000.0, 500.0, 600.0])
+
+    document = json.loads(artifacts.config_path.read_text(encoding="utf8"))
+    assert document["grid"]["non_pml_bounds"] == {
+        "min": pytest.approx([0.0, -500.0, -400.0]),
+        "max": pytest.approx([2000.0, 500.0, 600.0]),
+    }
 
 
 def test_explicit_domain_bounds_must_contain_geometry(

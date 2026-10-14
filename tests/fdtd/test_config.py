@@ -50,6 +50,8 @@ def _manifest() -> MeshManifest:
                 normal=(-1, 0, 0),
             )
         },
+        domain_min_nm=(0.0, -1000.0, -500.0),
+        domain_max_nm=(2000.0, 1000.0, 720.0),
     )
 
 
@@ -80,6 +82,8 @@ def test_config_uses_manifest_tags_and_rejects_extra_fields() -> None:
     assert config.geometry.volumes["background"].phys_group == 11
     assert config.geometry.layers["core"].phys_group == 17
     assert config.geometry.ports["o1"].phys_group == 23
+    assert config.grid.non_pml_bounds.min == (0.0, -1000.0, -500.0)
+    assert config.grid.non_pml_bounds.max == (2000.0, 1000.0, 720.0)
 
     document = config.model_dump()
     document["unsupported"] = True
@@ -163,3 +167,11 @@ def test_config_supports_gaussian_beam_and_fiber_monitor() -> None:
     assert config.excitation.gaussian_beam == beam
     assert config.excitation.default_port is None
     assert config.monitors == [monitor]
+
+
+def test_config_rejects_empty_non_pml_bounds() -> None:
+    document = _config().model_dump()
+    document["grid"]["non_pml_bounds"]["max"] = (2000.0, -1000.0, 720.0)
+
+    with pytest.raises(ValidationError, match="min must be smaller than max"):
+        FDTDConfig.model_validate(document)

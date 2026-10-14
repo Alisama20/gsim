@@ -360,6 +360,8 @@ def generate_mesh(
             },
             layers=layer_groups,
             ports=port_groups,
+            domain_min_nm=(xmin, ymin, zmin),
+            domain_max_nm=(xmax, ymax, zmax),
         )
 
         gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)

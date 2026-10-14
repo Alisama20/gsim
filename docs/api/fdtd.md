@@ -84,7 +84,8 @@ Optional `x_bounds`, `y_bounds`, and `z_bounds` tuples set the non-PML physical
 domain in micrometers. Omitted axes remain automatically sized from the
 component, PDK stack, and padding. Explicit bounds must contain the geometry,
 sources, and monitors; guided ports must remain on a domain face. The backend
-adds PML outside these bounds.
+adds PML outside these bounds. The resulting box is written to `config.json` as
+`grid.non_pml_bounds`, in nanometers.
 Do not combine explicit bounds and explicit per-axis padding on the same axis;
 the shared padding fallback can still be used for other axes.
 

@@ -191,11 +191,26 @@ class ExcitationConfig(_StrictModel):
         return self
 
 
+class BoundsConfig(_StrictModel):
+    """Axis-aligned box in mesh units."""
+
+    min: Vector3
+    max: Vector3
+
+    @model_validator(mode="after")
+    def validate_ordered(self) -> BoundsConfig:
+        """Require a box with positive extent along every axis."""
+        if any(lower >= upper for lower, upper in zip(self.min, self.max, strict=True)):
+            raise ValueError("bounds min must be smaller than max on every axis")
+        return self
+
+
 class GridConfig(_StrictModel):
     """Yee-grid and PML settings."""
 
     nanometers_per_cell: float = Field(gt=0)
     pml_cells: int = Field(ge=0)
+    non_pml_bounds: BoundsConfig
 
 
 class RunConfig(_StrictModel):
@@ -333,6 +348,10 @@ def build_fdtd_config(
         grid=GridConfig(
             nanometers_per_cell=nanometers_per_cell,
             pml_cells=pml_cells,
+            non_pml_bounds=BoundsConfig(
+                min=manifest.domain_min_nm,
+                max=manifest.domain_max_nm,
+            ),
         ),
         run=RunConfig(
             max_timesteps=max_timesteps,
@@ -343,6 +362,7 @@ def build_fdtd_config(
 
 
 __all__ = [
+    "BoundsConfig",
     "DipoleConfig",
     "ExcitationConfig",
     "FDTDConfig",
