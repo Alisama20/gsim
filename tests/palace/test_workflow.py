@@ -225,59 +225,90 @@ def test_validate_mesh_autogenerates_config(tmp_path, cpw_component):
     assert config_path.exists(), "validate_mesh should auto-generate config.json"
 
 
-def test_reactive_port_parameters_go_to_lumped_element(tmp_path, cpw_component):
-    """Reactive parameters must go into a passive LumpedPort (Active: false).
-
-    Driven simulations forbid L/C on excited ports in Palace.  The fix is to
-    emit an additional passive port entry (Active: false) on the same boundary
-    surface carrying the reactive R/L/C, while the excited port gets only R.
-    """
+def _driven_lumped_ports(tmp_path, cpw_component, name, **o1_kwargs):
+    """Write a two-port driven config and return its LumpedPort entries."""
     sim = DrivenSim()
-    sim.set_output_dir(str(tmp_path / "palace-sim-reactive"))
+    sim.set_output_dir(str(tmp_path / name))
     sim.set_geometry(cpw_component)
     sim.set_stack(substrate_thickness=2.0, air_above=300.0)
-    sim.add_port(
-        "o1",
-        layer="metal1",
-        length=5.0,
-        impedance=50.0,
-        resistance=2.5,
-        inductance=10e-9,
-        capacitance=1e-15,
-    )
+    sim.add_port("o1", layer="metal1", length=5.0, **o1_kwargs)
     sim.add_port("o2", layer="metal1", length=5.0, impedance=50.0)
     sim.set_driven(fmin=1e9, fmax=50e9, num_points=20)
     sim.mesh(preset="coarse")
     sim.write_config()
-
     assert sim._output_dir is not None
-    config_path = Path(sim._output_dir) / "config.json"
-    config = json.loads(config_path.read_text())
-    boundaries = config["Boundaries"]
+    config = json.loads((Path(sim._output_dir) / "config.json").read_text())
+    assert "LumpedElement" not in config["Boundaries"]
+    return config["Boundaries"]["LumpedPort"]
 
-    assert "LumpedPort" in boundaries
-    # 2 primary ports + 1 passive reactive port
-    assert len(boundaries["LumpedPort"]) == 3
-    assert "LumpedElement" not in boundaries
 
-    # Excited port 1 must have only R (no reactive terms)
-    p1 = next(port for port in boundaries["LumpedPort"] if port["Index"] == 1)
-    assert p1["R"] == 50.0
-    assert "L" not in p1
-    assert "C" not in p1
+def test_driven_non_excited_port_keeps_its_elements(tmp_path, cpw_component):
+    """A non-excited driven port carries R/L/C on one active entry.
 
-    # Passive reactive port must be Active: false and carry R/L/C
-    passive = [p for p in boundaries["LumpedPort"] if not p.get("Active", True)]
-    assert len(passive) == 1
-    rp = passive[0]
-    assert rp.get("Active") is False
-    assert rp["R"] == 2.5
-    assert rp["L"] == 10e-9
-    assert rp["C"] == 1e-15
-    assert "Attributes" in rp
-    assert "Direction" in rp
-    # Passive port must share the same boundary attributes as the excited port
-    assert rp["Attributes"] == p1["Attributes"]
+    Palace skips ports with ``"Active": false`` entirely, so the elements must
+    sit on the port's own entry, which Palace applies in parallel.
+    """
+    ports = _driven_lumped_ports(
+        tmp_path,
+        cpw_component,
+        "palace-sim-element",
+        impedance=50.0,
+        resistance=2.5,
+        inductance=10e-9,
+        capacitance=1e-15,
+        excited=False,
+    )
+    assert len(ports) == 2
+    assert all(port.get("Active", True) for port in ports)
+    p1 = next(port for port in ports if port["Index"] == 1)
+    assert p1["Excitation"] is False
+    assert (p1["R"], p1["L"], p1["C"]) == (2.5, 10e-9, 1e-15)
+
+
+def test_driven_capacitor_port_has_no_default_resistance(tmp_path, cpw_component):
+    """A capacitor-only element must not get the 50 ohm default in parallel."""
+    ports = _driven_lumped_ports(
+        tmp_path, cpw_component, "palace-sim-cap", capacitance=1.91e-15, excited=False
+    )
+    p1 = next(port for port in ports if port["Index"] == 1)
+    assert p1["C"] == 1.91e-15
+    assert "R" not in p1
+    assert p1.get("Active", True)
+
+
+def test_driven_excited_port_keeps_its_reactance(tmp_path, cpw_component):
+    """An excited driven port carries its L/C on its own entry; Palace applies them."""
+    ports = _driven_lumped_ports(
+        tmp_path,
+        cpw_component,
+        "palace-sim-excited",
+        impedance=50.0,
+        inductance=10e-9,
+        capacitance=1e-15,
+    )
+    assert len(ports) == 2
+    assert all(port.get("Active", True) for port in ports)
+    p1 = next(port for port in ports if port["Index"] == 1)
+    assert p1["Excitation"] == 1
+    assert (p1["R"], p1["L"], p1["C"]) == (50.0, 10e-9, 1e-15)
+
+
+def test_driven_excited_port_separate_resistance_is_reported(
+    tmp_path, cpw_component, caplog
+):
+    """An excited port's R is its reference impedance: a different resistance warns."""
+    with caplog.at_level("WARNING", logger="gsim.palace.mesh.config_generator"):
+        ports = _driven_lumped_ports(
+            tmp_path,
+            cpw_component,
+            "palace-sim-excited-r",
+            impedance=50.0,
+            resistance=2.5,
+            capacitance=1e-15,
+        )
+    p1 = next(port for port in ports if port["Index"] == 1)
+    assert (p1["R"], p1["C"]) == (50.0, 1e-15)
+    assert "resistance=2.5 is ignored" in caplog.text
 
 
 # ---------------------------------------------------------------------------
