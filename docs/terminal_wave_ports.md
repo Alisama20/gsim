@@ -77,8 +77,10 @@ modes with different velocities), where rotating modes is not allowed.
   writes the complex voltage of each mode on each path to `mode-V.csv`; `PalaceTextResults.mode_voltage(index, mode)`
   reads it. Modes come with `k_n` and `n_eff` in `mode-kn.csv`, from which `gamma = j * k0 * n_eff`.
 - **Currents.** Use complex terminal currents from the saved mode fields (an Ampere contour around each terminal), or
-  the reaction route below. For a reciprocal line `T_I^T T_V` is diagonal with entries `r_k = V_k^T I_k` (the
-  unconjugated reaction), so `T_I = T_V^{-T} diag(r)`; `currents_from_reaction(t_v, reaction)` implements it. A
+  the reaction route below. With the unconjugated reaction matrix `R = T_V^T T_I`, `T_I = T_V^{-T} R`;
+  `currents_from_reaction(t_v, reaction)` implements it. For distinct modes of a reciprocal line `R` is diagonal
+  (`r_k = V_k^T I_k`) and the vector `r` is enough. Within a degenerate group any basis is valid, and a mixed
+  basis has off-diagonal reactions, so pass the full matrix there (or orthogonalise the group first). A
   quasi-TEM solve gives the same result from `T_I = (G + j w C) T_V Gamma^-1`.
 - **Warning: do not derive currents from power alone.** If `T_I` is rebuilt from the complex voltages in `mode-V.csv`
   and the *real* power implied by `Z_PV`, i.e. `r_k` is replaced by `2 P_k`, the result is exact only without loss. On

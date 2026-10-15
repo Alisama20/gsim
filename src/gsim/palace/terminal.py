@@ -267,14 +267,21 @@ def currents_from_reaction(
 ) -> NDArray[np.complex128]:
     """Terminal currents from terminal voltages and the modal reaction.
 
-    For a reciprocal line ``T_I^T T_V`` is diagonal with entries
-    ``r_k = V_k^T I_k`` (the unconjugated reaction of mode ``k``), so
-    ``T_I = T_V^{-T} diag(r)``. Using the real power ``2 P_k`` for ``r_k`` is
+    The reaction matrix is ``R = T_V^T T_I`` (unconjugated), so
+    ``T_I = T_V^{-T} R``. Pass the full matrix ``R`` whenever the modes may be
+    mixed: within a degenerate group any basis is valid, and a mixed basis
+    has nonzero off-diagonal reactions.
+
+    A vector ``r`` is read as ``R = diag(r)`` with ``r_k = V_k^T I_k``. This
+    holds only for a reaction-orthogonal basis (``V_j^T I_k = 0`` for
+    ``j != k``): distinct modes of a reciprocal line, or degenerate modes
+    that were orthogonalised. Using the real power ``2 P_k`` for ``r_k`` is
     exact only without loss.
 
     Args:
         t_v: ``(n, n)`` or ``(nf, n, n)`` terminal voltages (column = mode).
-        reaction: ``(n,)`` or ``(nf, n)`` reaction of each mode.
+        reaction: the full matrix ``R``, ``(n, n)`` for a 2-D ``t_v`` or
+            ``(nf, n, n)``; or the diagonal only, ``(n,)`` or ``(nf, n)``.
 
     Returns:
         ``T_I`` with the shape of ``t_v``.
@@ -289,11 +296,16 @@ def currents_from_reaction(
         msg = f"t_v must be (n, n) or (nf, n, n), got {v.shape}"
         raise ValueError(msg)
     n = v.shape[-1]
-    bad_shape = (
-        r.shape[-1] != n
-        or r.ndim > v.ndim - 1
-        or (r.ndim == 2 and v.ndim == 3 and r.shape[0] != v.shape[0])
-    )
+    full = r.ndim == v.ndim  # (n, n) with 2-D t_v, (nf, n, n) with 3-D t_v
+    if full:
+        bad_shape = r.shape != v.shape
+    else:
+        bad_shape = (
+            r.ndim == 0
+            or r.shape[-1] != n
+            or r.ndim > v.ndim - 1
+            or (r.ndim == 2 and v.ndim == 3 and r.shape[0] != v.shape[0])
+        )
     if bad_shape:
         msg = f"reaction shape {r.shape} does not match t_v shape {v.shape}"
         raise ValueError(msg)
@@ -302,8 +314,8 @@ def currents_from_reaction(
     if np.any(np.linalg.cond(v) > _MAX_COND):
         msg = "t_v is ill-conditioned: the modes do not span the terminals"
         raise ValueError(msg)
-    diag = r[..., :, None] * np.eye(n)
-    return np.linalg.solve(np.swapaxes(v, -1, -2), diag)
+    r_mat = r if full else r[..., :, None] * np.eye(n)
+    return np.linalg.solve(np.swapaxes(v, -1, -2), r_mat)
 
 
 def uniform_line_modal_s(gamma: ArrayLike, length: float) -> NDArray[np.complex128]:

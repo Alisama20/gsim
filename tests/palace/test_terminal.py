@@ -261,6 +261,28 @@ def test_currents_from_reaction_reproduces_t_i():
     assert np.abs(rec0 - ti[0]).max() / np.abs(ti[0]).max() < TOL
 
 
+def test_currents_from_reaction_mixed_degenerate_basis():
+    # Mixed degenerate basis: V_j^T I_k != 0 off the diagonal, so the
+    # per-mode reactions alone cannot recover T_I; the full matrix can.
+    tv = np.array([[1.0, 1.0], [0.0, 1.0]])
+    ti = tv.copy()
+    r_full = tv.T @ ti
+    assert np.abs(r_full - np.diag(np.diag(r_full))).max() > 0.5
+    assert np.allclose(currents_from_reaction(tv, r_full), ti)
+    assert not np.allclose(currents_from_reaction(tv, np.diag(r_full)), ti)
+    # frequency-resolved full matrix
+    rec = currents_from_reaction(np.stack([tv, 2 * tv]), np.stack([r_full, 4 * r_full]))
+    assert np.allclose(rec, np.stack([ti, 2 * ti]))
+    # terminal S matches the S built from the true currents
+    s_m = uniform_line_modal_s(np.array([[1j, 1j]]), 0.5)
+    want = modal_to_terminal_s(s_m, [tv, tv], [ti, ti], z_ref=1.0)
+    t_i = currents_from_reaction(tv, r_full)
+    got = modal_to_terminal_s(s_m, [tv, tv], [t_i, t_i], z_ref=1.0)
+    assert np.abs(got - want).max() < TOL
+    with pytest.raises(ValueError, match="does not match"):
+        currents_from_reaction(np.stack([tv, tv]), np.ones((3, 2, 2)))
+
+
 def test_uniform_line_modal_s_structure():
     gamma = np.array([[1.0 + 2.0j, 0.5 + 3.0j]])
     s = uniform_line_modal_s(gamma, 0.1)
