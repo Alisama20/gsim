@@ -39,7 +39,7 @@ def _make_cpw_component():
             name="o1",
             center=(-length / 2, 0),
             width=s_width,
-            orientation=0,
+            orientation=180,
             port_type="electrical",
             layer=layer,
         )
@@ -47,7 +47,7 @@ def _make_cpw_component():
             name="o2",
             center=(length / 2, 0),
             width=s_width,
-            orientation=180,
+            orientation=0,
             port_type="electrical",
             layer=layer,
         )
@@ -351,7 +351,7 @@ def _make_qpdk_component():
             name="o1",
             center=(-length / 2, 0),
             width=s_width,
-            orientation=0,
+            orientation=180,
             port_type="electrical",
             layer=QPDK_LAYER,
         )
@@ -359,7 +359,7 @@ def _make_qpdk_component():
             name="o2",
             center=(length / 2, 0),
             width=s_width,
-            orientation=180,
+            orientation=0,
             port_type="electrical",
             layer=QPDK_LAYER,
         )

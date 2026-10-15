@@ -2146,6 +2146,11 @@ def add_ports(
                     zmax = zmax + port.z_margin
                     zmin = max(zmin, layer_zmin)
                     zmax = min(zmax, layer_zmax)
+                    # Stack layers can reach past the meshed domain; a port
+                    # face outside it has no volume to attach to.
+                    if domain_bounds is not None:
+                        zmin = max(zmin, domain_bounds[2])
+                        zmax = min(zmax, domain_bounds[5])
 
                 # Guard against inverted/degenerate z extents.
                 if zmax <= zmin:

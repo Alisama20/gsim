@@ -21,7 +21,7 @@ from gsim.palace import DrivenSim, EigenmodeSim, ElectrostaticSim
 # ---------------------------------------------------------------------------
 
 
-def _make_cpw_component():
+def _make_cpw_component(with_ports: bool = True):
     """Create a simple GSG electrode component."""
     gf.gpdk.PDK.activate()
 
@@ -32,6 +32,7 @@ def _make_cpw_component():
         g_width: float = 40,
         gap_width: float = 6,
         layer=gf.gpdk.LAYER.M1,
+        with_ports: bool = True,
     ) -> gf.Component:
         c = gf.Component()
         r1 = c << gf.c.rectangle((length, g_width), centered=True, layer=layer)
@@ -39,11 +40,13 @@ def _make_cpw_component():
         c << gf.c.rectangle((length, s_width), centered=True, layer=layer)
         r3 = c << gf.c.rectangle((length, g_width), centered=True, layer=layer)
         r3.move((0, -(g_width + s_width) / 2 - gap_width))
+        if not with_ports:
+            return c
         c.add_port(
             name="o1",
             center=(-length / 2, 0),
             width=s_width,
-            orientation=0,
+            orientation=180,
             port_type="electrical",
             layer=layer,
         )
@@ -51,19 +54,29 @@ def _make_cpw_component():
             name="o2",
             center=(length / 2, 0),
             width=s_width,
-            orientation=180,
+            orientation=0,
             port_type="electrical",
             layer=layer,
         )
         return c
 
-    return gsg_electrode()
+    return gsg_electrode(with_ports=with_ports)
 
 
 @pytest.fixture(scope="module")
 def cpw_component():
     """Create a shared CPW component for all tests in the module."""
     return _make_cpw_component()
+
+
+@pytest.fixture(scope="module")
+def portless_component():
+    """The CPW electrodes without ports, for simulations that take none.
+
+    Driven fixtures store port settings on ``cpw_component``'s ports, and a
+    later simulation of that component would mesh them too.
+    """
+    return _make_cpw_component(with_ports=False)
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +195,8 @@ class TestDrivenSimInplanePorts:
         sim.set_output_dir(str(tmp_path / "palace-sim"))
         sim.set_geometry(cpw_component)
         sim.set_stack(substrate_thickness=2.0, air_above=300.0)
+        # Inplane ports straddle the design edge; the airbox keeps them inside.
+        sim.set_airbox(margin_x=10.0)
         sim.add_port("o1", layer="metal1", length=5.0, impedance=50.0)
         sim.add_port("o2", layer="metal1", length=5.0, impedance=50.0)
         sim.set_driven(fmin=1e9, fmax=50e9, num_points=20)
@@ -210,6 +225,8 @@ def test_validate_mesh_autogenerates_config(tmp_path, cpw_component):
     sim.set_output_dir(str(tmp_path / "palace-sim-autoconfig"))
     sim.set_geometry(cpw_component)
     sim.set_stack(substrate_thickness=2.0, air_above=300.0)
+    # Inplane ports straddle the design edge; the airbox keeps them inside.
+    sim.set_airbox(margin_x=10.0)
     sim.add_port("o1", layer="metal1", length=5.0, impedance=50.0)
     sim.add_port("o2", layer="metal1", length=5.0, impedance=50.0)
     sim.set_driven(fmin=1e9, fmax=50e9, num_points=20)
@@ -225,12 +242,37 @@ def test_validate_mesh_autogenerates_config(tmp_path, cpw_component):
     assert config_path.exists(), "validate_mesh should auto-generate config.json"
 
 
+def test_write_config_rejects_port_outside_domain(tmp_path, cpw_component):
+    """A port past the domain edge must fail locally, not on the cloud.
+
+    Palace aborts on such a mesh (MFEM ``STable3D``) without writing a log.
+    """
+    sim = DrivenSim()
+    sim.set_output_dir(str(tmp_path / "palace-sim-port-outside"))
+    sim.set_geometry(cpw_component)
+    sim.set_stack(substrate_thickness=2.0)
+    sim.add_port("o1", layer="metal1", length=5.0, impedance=50.0)
+    sim.add_port("o2", layer="metal1", length=5.0, impedance=50.0)
+    sim.set_driven(fmin=1e9, fmax=50e9, num_points=20)
+    sim.mesh(preset="coarse")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        sim.write_config()
+
+    message = str(excinfo.value)
+    assert "Port P1 ('o1') lies outside the meshed domain" in message
+    assert "Port P2 ('o2') lies outside the meshed domain" in message
+    assert "set_airbox(" in message
+
+
 def _driven_lumped_ports(tmp_path, cpw_component, name, **o1_kwargs):
     """Write a two-port driven config and return its LumpedPort entries."""
     sim = DrivenSim()
     sim.set_output_dir(str(tmp_path / name))
     sim.set_geometry(cpw_component)
     sim.set_stack(substrate_thickness=2.0, air_above=300.0)
+    # Inplane ports straddle the design edge; the airbox keeps them inside.
+    sim.set_airbox(margin_x=10.0)
     sim.add_port("o1", layer="metal1", length=5.0, **o1_kwargs)
     sim.add_port("o2", layer="metal1", length=5.0, impedance=50.0)
     sim.set_driven(fmin=1e9, fmax=50e9, num_points=20)
@@ -321,12 +363,12 @@ class TestEigenmodeSimWorkflow:
 
     @classmethod
     @pytest.fixture(scope="class")
-    def eigenmode_sim(cls, tmp_path_factory, cpw_component):
+    def eigenmode_sim(cls, tmp_path_factory, portless_component):
         """Create and mesh an EigenmodeSim."""
         tmp_path = tmp_path_factory.mktemp("eigenmode")
         sim = EigenmodeSim()
         sim.set_output_dir(str(tmp_path / "palace-sim"))
-        sim.set_geometry(cpw_component)
+        sim.set_geometry(portless_component)
         sim.set_stack(substrate_thickness=2.0, air_above=300.0)
         sim.set_eigenmode(num_modes=5, target=50e9)
         sim.mesh(preset="coarse")
@@ -357,12 +399,12 @@ class TestEigenmodeSimWorkflow:
     @pytest.mark.parametrize("axis", ["x", "y"])
     @pytest.mark.parametrize("margin", [0.0, 7.5])
     def test_config_has_floquet_periodic_boundary(
-        self, tmp_path, cpw_component, axis, margin
+        self, tmp_path, portless_component, axis, margin
     ):
         """Floquet in eigenmode emits Palace Periodic boundary section."""
         sim = EigenmodeSim()
         sim.set_output_dir(str(tmp_path / "palace-sim-floquet"))
-        sim.set_geometry(cpw_component)
+        sim.set_geometry(portless_component)
         sim.set_stack(substrate_thickness=2.0, air_above=300.0)
         sim.set_eigenmode(
             num_modes=5,
@@ -420,12 +462,12 @@ class TestElectrostaticSimWorkflow:
 
     @classmethod
     @pytest.fixture(scope="class")
-    def electrostatic_sim(cls, tmp_path_factory, cpw_component):
+    def electrostatic_sim(cls, tmp_path_factory, portless_component):
         """Create and mesh an ElectrostaticSim with terminals."""
         tmp_path = tmp_path_factory.mktemp("electrostatic")
         sim = ElectrostaticSim()
         sim.set_output_dir(str(tmp_path / "palace-sim"))
-        sim.set_geometry(cpw_component)
+        sim.set_geometry(portless_component)
         sim.set_stack(substrate_thickness=2.0, air_above=300.0)
         sim.add_terminal("T1", layer="metal1")
         sim.add_terminal("T2", layer="metal1")
@@ -460,7 +502,7 @@ class TestElectrostaticSimWorkflow:
         assert "WavePort" not in boundaries
 
     def test_planar_conductor_terminal_not_grounded(
-        self, tmp_path_factory, cpw_component
+        self, tmp_path_factory, portless_component
     ):
         """Terminals on planar (thin) conductor layers must be picked up.
 
@@ -473,7 +515,7 @@ class TestElectrostaticSimWorkflow:
         tmp_path = tmp_path_factory.mktemp("electrostatic_planar")
         sim = ElectrostaticSim()
         sim.set_output_dir(str(tmp_path / "palace-sim"))
-        sim.set_geometry(cpw_component)
+        sim.set_geometry(portless_component)
         sim.set_stack(substrate_thickness=2.0, air_above=300.0)
         sim.add_terminal("T1", layer="metal1")
         sim.add_terminal("T2", layer="metal1")
@@ -638,7 +680,9 @@ class TestNumericalConfig:
         assert sample["MaxFreq"] == 10.0
         assert sample["FreqStep"] == pytest.approx(0.8)
 
-    def test_grouped_eigenmode_settings_flow_to_config(self, cpw_component, tmp_path):
+    def test_grouped_eigenmode_settings_flow_to_config(
+        self, portless_component, tmp_path
+    ):
         sim = EigenmodeSim(
             solver={
                 "order": 1,
@@ -647,7 +691,7 @@ class TestNumericalConfig:
             }
         )
         sim.set_output_dir(tmp_path / "grouped-eigenmode")
-        sim.set_geometry(cpw_component)
+        sim.set_geometry(portless_component)
         sim.set_stack(substrate_thickness=2.0)
         sim.mesh(preset="coarse")
         # Updating common controls after meshing must retain the target.
