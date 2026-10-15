@@ -9,10 +9,14 @@ This module contains Pydantic models for port definitions:
 
 from __future__ import annotations
 
+import math
 import warnings
-from typing import Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+if TYPE_CHECKING:
+    from shapely import Polygon
 
 
 class PortConfig(BaseModel):
@@ -147,17 +151,93 @@ class TerminalConfig(BaseModel):
     """Configuration for a terminal (for electrostatic capacitance extraction).
 
     Terminals define conductor surfaces for capacitance matrix extraction
-    in electrostatic simulations.
+    in electrostatic simulations. A terminal selects conductors in one of
+    three ways, and at least one of ``layer``, ``net`` and ``region`` is
+    needed:
+
+    - ``layer`` alone: every conductor shape on that layer (the layer mode;
+      two separate electrodes on one layer are then one terminal).
+    - ``net``: the connected conductor with that name, metal and vias on every
+      layer it spans (see ``ElectrostaticSim.nets()``).
+    - ``region``: every connected conductor with a shape inside the region,
+      optionally only on ``layer``.
+
+    ``net`` cannot be combined with ``region`` or ``layer``.
 
     Attributes:
         name: Terminal name
-        layer: Target conductor layer
+        layer: Target conductor layer. With ``region`` it limits the shapes
+            that are tested against the region.
+        net: Name of a net (the names of its ports joined by ``+``, or
+            ``net<k>``), or the name of a port on it.
+        region: Box ``(xmin, ymin, xmax, ymax)`` or list of at least three
+            ``(x, y)`` points of a polygon, in um.
+        floating: The conductor is not driven: it is solved as a terminal and
+            eliminated from the capacitance matrix afterwards.
     """
 
     model_config = ConfigDict(validate_assignment=True)
 
     name: str
-    layer: str
+    layer: str | None = None
+    net: str | None = None
+    region: tuple[float, float, float, float] | list[tuple[float, float]] | None = None
+    floating: bool = False
+
+    @model_validator(mode="after")
+    def _validate_selection(self) -> Self:
+        """Check that the terminal selects conductors in exactly one way."""
+        if self.layer is None and self.net is None and self.region is None:
+            raise ValueError(
+                f"Terminal '{self.name}' needs layer, net or region to select "
+                "its conductors"
+            )
+        if self.net is not None and (self.region is not None or self.layer is not None):
+            raise ValueError(
+                f"Terminal '{self.name}': net cannot be combined with region or layer"
+            )
+        if self.region is not None:
+            self._validate_region()
+        return self
+
+    def _validate_region(self) -> None:
+        """Check the box or polygon of ``region``."""
+        region = self.region
+        if region is None:
+            return
+        if isinstance(region, tuple):
+            x0, y0, x1, y1 = region
+            if not all(math.isfinite(v) for v in region):
+                raise ValueError(f"Terminal '{self.name}': region must be finite")
+            if not (x0 < x1 and y0 < y1):
+                raise ValueError(
+                    f"Terminal '{self.name}': a region box needs xmin < xmax and "
+                    f"ymin < ymax, got {region}"
+                )
+            return
+        if len(region) < 3:
+            raise ValueError(
+                f"Terminal '{self.name}': a region polygon needs at least 3 "
+                f"points, got {len(region)}"
+            )
+        if not all(math.isfinite(v) for point in region for v in point):
+            raise ValueError(f"Terminal '{self.name}': region must be finite")
+        polygon = self.region_polygon()
+        if polygon is None or not polygon.is_valid or polygon.area <= 0:
+            raise ValueError(
+                f"Terminal '{self.name}': the region polygon is degenerate or "
+                "self-intersecting"
+            )
+
+    def region_polygon(self) -> Polygon | None:
+        """The region as a shapely polygon (um), or None when there is none."""
+        from shapely import Polygon, box
+
+        if self.region is None:
+            return None
+        if isinstance(self.region, tuple):
+            return box(*self.region)
+        return Polygon(self.region)
 
 
 class ImpedanceBoundaryConfig(BaseModel):

@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     )
     from gsim.palace.models.ports import TerminalConfig
     from gsim.palace.ports.config import PalacePort
+    from gsim.palace.terminals import ResolvedTerminal
 
 
 def _resolve_impedance_boundaries(
@@ -128,6 +129,63 @@ def _resolve_impedance_boundaries(
     return entries
 
 
+def _electrostatic_net_boundaries(
+    groups: dict, resolved_terminals: list[ResolvedTerminal] | None
+) -> dict[str, Any]:
+    """Terminal and Ground entries of an electrostatic mesh with a group per net.
+
+    Each terminal drives the physical groups of its nets: the conductor shells,
+    planar conductor surfaces and via boundary faces of exactly those nets.
+    Every other conductor, planar-conductor, PEC-block and via-boundary group is
+    Ground, so the Terminal and Ground attributes never overlap.
+
+    Args:
+        groups: The mesh groups, with ``groups["nets"]`` from the net split.
+        resolved_terminals: The terminals resolved to net positions, in the
+            order of the Palace terminal indices (from 1).
+
+    Raises:
+        ValueError: If there are no resolved terminals, a terminal names a net
+            that is not in the mesh, or a terminal ends up with no surface.
+    """
+    if not resolved_terminals:
+        raise ValueError(
+            "The mesh has one physical group per net, so the terminals must be "
+            "resolved to nets; pass resolved_terminals (ElectrostaticSim does)."
+        )
+    nets = groups["nets"]
+    terminal_entries: list[dict[str, object]] = []
+    used: set[int] = set()
+    for index, terminal in enumerate(resolved_terminals, start=1):
+        bad = [k for k in terminal.nets if not 0 <= k < len(nets)]
+        if bad:
+            raise ValueError(
+                f"Terminal '{terminal.name}' refers to net position {bad[0]}, but "
+                f"the mesh has {len(nets)} nets. Run mesh() again."
+            )
+        attributes = sorted(
+            {pg for k in terminal.nets for pg in nets[k]["phys_groups"]}
+        )
+        if not attributes:
+            names = ", ".join(repr(nets[k]["name"]) for k in terminal.nets)
+            raise ValueError(
+                f"Terminal '{terminal.name}' has no surfaces to drive: its nets "
+                f"({names}) have no conductor or via faces in the mesh."
+            )
+        terminal_entries.append({"Index": index, "Attributes": attributes})
+        used.update(attributes)
+
+    every: set[int] = set()
+    for section in ("conductor_surfaces", "pec_surfaces"):
+        every.update(info["phys_group"] for info in groups.get(section, {}).values())
+    for pgs in groups.get("via_boundary_surfaces", {}).values():
+        every.update(pgs)
+    boundaries: dict[str, Any] = {"Terminal": terminal_entries}
+    if ground := sorted(every - used):
+        boundaries["Ground"] = {"Attributes": ground}
+    return boundaries
+
+
 def generate_palace_config(
     groups: dict,
     ports: list[PalacePort],
@@ -148,6 +206,7 @@ def generate_palace_config(
     terminals: list[TerminalConfig] | None = None,
     refinement_config: RefinementConfig | None = None,
     periodic_translation: tuple[float, float, float] | None = None,
+    resolved_terminals: list[ResolvedTerminal] | None = None,
 ) -> Path:
     """Generate Palace config.json file.
 
@@ -169,6 +228,9 @@ def generate_palace_config(
         hints: Additional config hints merged into the JSON
         refinement_config: Optional RefinementConfig for adaptive mesh
             refinement. Defaults to AMR off.
+        resolved_terminals: Electrostatic terminals resolved to nets; needed
+            when the mesh has one group per net (``"nets"`` in ``groups``),
+            where they replace ``terminals``.
 
     Returns:
         Path to the generated config.json
@@ -430,8 +492,15 @@ def generate_palace_config(
 
     is_electrostatic = simulation_type in ("electrostatic", "electrostatics")
 
-    if is_electrostatic and terminals:
-        terminal_layer_names: set[str] = {t.layer for t in terminals}
+    if is_electrostatic and "nets" in groups:
+        # One physical group per net: terminals and Ground follow the nets
+        boundaries = _electrostatic_net_boundaries(groups, resolved_terminals)
+
+    elif is_electrostatic and terminals:
+        # Layer-only terminals here: net or region terminals take the branch above.
+        terminal_layer_names: set[str] = {
+            t.layer for t in terminals if t.layer is not None
+        }
         via_boundary = groups.get("via_boundary_surfaces", {})
 
         def _via_touches(via_name: str, conductor_layer_name: str) -> bool:
@@ -463,7 +532,9 @@ def generate_palace_config(
                 attrs.append(pec_surfaces[terminal.layer]["phys_group"])
             # Vias touching this terminal's layer
             for via_name, via_pgs in via_boundary.items():
-                if _via_touches(via_name, terminal.layer):
+                if terminal.layer is not None and _via_touches(
+                    via_name, terminal.layer
+                ):
                     attrs.extend(via_pgs)
                     vias_on_terminal.add(via_name)
 
@@ -969,6 +1040,7 @@ def write_config(
     electrostatic_config: ElectrostaticConfig | None = None,
     terminals: list[TerminalConfig] | None = None,
     refinement_config: RefinementConfig | None = None,
+    resolved_terminals: list[ResolvedTerminal] | None = None,
 ) -> Path:
     """Write Palace config.json from a MeshResult.
 
@@ -984,6 +1056,8 @@ def write_config(
         eigenmode_config: Optional EigenmodeConfig for eigenproblems settings
         absorbing_boundary: Whether to add absorbing (PML) boundary
         hints: Additional config hints merged into the JSON
+        resolved_terminals: Electrostatic terminals resolved to nets, for a
+            mesh with one physical group per net
 
     Returns:
         Path to the generated config.json
@@ -1020,6 +1094,7 @@ def write_config(
         electrostatic_config=electrostatic_config,
         terminals=terminals,
         refinement_config=refinement_config,
+        resolved_terminals=resolved_terminals,
     )
 
     # Update the mesh_result with the config path

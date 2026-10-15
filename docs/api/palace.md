@@ -188,6 +188,57 @@ config generation also support `z` for supplied mesh metadata.
 `compute_floquet_wave_vector()` now require an explicit length on the config or as a `periodic_length` argument; the old `l0`
 argument and frequency-based length estimate are removed. Old mesh results without translation metadata must be regenerated.
 
+## Electrostatic terminals
+
+An `ElectrostaticSim` terminal selects conductors by connected net, by region or by
+layer. A net is the metal that touches on one layer plus the metal that vias join on
+other layers, so two electrodes on one layer are two nets (see `sim.nets()`).
+
+```python
+sim.add_terminal("TOP", net="PLUS")  # net by port name, or by its name in sim.nets()
+sim.add_terminal("LEFT", region=(0, 0, 20, 20), layer="m1")  # nets with an m1 shape in the box
+sim.add_terminal("SHIELD", net="net3", floating=True)  # solved, then eliminated
+sim.add_terminal("T1", layer="metal5")  # a whole layer, as before
+sim.unassigned_conductors = "ground"  # the default; or "floating"
+print(sim.resolve_terminals())  # check the selection before meshing
+cap = sim.load_capacitance(sim.run())  # floating terminals are eliminated
+cap.between("TOP", "LEFT")
+cap.to_ground("LEFT")
+cap.pairs()  # every pair and every terminal-to-ground value, as a table
+```
+
+- **Net names** are the names of the ports on the net joined by `+`, or `net<k>`
+  (`k` counts from 1 in layout order). `net=` matches the whole name or any one port
+  name; if several nets carry the same port name they all go into that terminal.
+  `net<k>` changes when the layout is edited, so prefer port names or `region=`.
+  GDS text labels are not used.
+- **`region=`** is a box `(xmin, ymin, xmax, ymax)` or a list of at least three
+  `(x, y)` points, in um. It selects every net with a conductor or via shape that
+  overlaps the region, only on `layer` when that is given. It always selects whole
+  nets, because part of a conductor cannot be at another potential.
+- **`layer=` alone** keeps the old behaviour while no terminal uses `net`, `region` or
+  `floating`: every shape on that layer, and vias by z-overlap. Once any terminal uses
+  nets, `layer=` means every net with a shape on that layer, including the metal that
+  vias join to it on other layers. `net=` cannot be combined with `region=` or `layer=`.
+- **Conductors in no terminal** are grounded, as before. With
+  `unassigned_conductors="floating"` each becomes an extra terminal named after its
+  net. PEC blocks are always grounded. A net in two terminals is an error.
+- **Floating conductors** are solved as terminals, one extra Palace excitation each,
+  and `load_capacitance` removes them with a Schur complement of the Maxwell matrix,
+  `C_tt - C_tf C_ff^-1 C_ft`, which is exact for electrostatics. Pass
+  `eliminate_floating=False` to keep them. The rows are the terminals in the order
+  they were added, then the automatic floating terminals in net order.
+- **Vias and merging.** `mesh()` merges vias closer than `merge_via_distance` (2 um by
+  default). If that would join the vias of two nets it raises a `ValueError` naming the
+  via layer and the nets; set `merge_via_distance` below the gap between them.
+- **Changing the selection style.** A mesh made for layer terminals cannot serve net
+  terminals and the other way round; `write_config()` raises and asks you to call
+  `mesh()` again. In net mode `write_config()` also writes `terminals.json`, which
+  `load_capacitance` reads when the simulation object is new.
+- **Reading the results.** `cap.between(a, b)` is the capacitance between two
+  electrodes and `cap.to_ground(a)` the one to ground; `cap.pairs()` lists both kinds
+  apart. If no conductor is grounded, `to_ground` comes out near zero.
+
 ## Capacitance
 
 - [`CapacitanceMatrices`][gsim.palace.CapacitanceMatrices]

@@ -347,6 +347,17 @@ class PalaceSimMixin(SolverSettingsMixin):
     absorbing_boundary: bool
     _airbox_config: dict[str, Any]
 
+    def _mesh_by_net(self) -> bool:
+        """Whether the mesh needs one physical group per net; only some sims do."""
+        return False
+
+    def _config_terminals(
+        self,
+        groups: dict[str, Any],  # noqa: ARG002
+    ) -> list[Any] | None:
+        """Terminals resolved to nets for the config; only net-mode sims have them."""
+        return None
+
     # -------------------------------------------------------------------------
     # Output directory
     # -------------------------------------------------------------------------
@@ -1351,11 +1362,38 @@ class PalaceSimMixin(SolverSettingsMixin):
             )
         if self.simulation_type == "electrostatic":
             # Validate terminal configurations
-            errors.extend(
-                f"Terminal '{terminal.name}': 'layer' is required"
+            terminal_errors = [
+                f"Terminal '{terminal.name}': needs layer, net or region"
                 for terminal in self._terminals
-                if not terminal.layer
+                if not (terminal.layer or terminal.net or terminal.region)
+            ]
+            errors.extend(terminal_errors)
+            # Two layer-only terminals on one layer select the same conductors
+            by_layer: dict[str, list[str]] = {}
+            for terminal in self._terminals:
+                if terminal.layer and terminal.net is None and terminal.region is None:
+                    by_layer.setdefault(terminal.layer, []).append(terminal.name)
+            warnings_list.extend(
+                f"Terminals {', '.join(repr(n) for n in names)} all select every "
+                f"shape on layer '{layer}', so they get the same conductors. Use "
+                "net= or region= to separate electrodes on one layer."
+                for layer, names in by_layer.items()
+                if len(names) > 1
             )
+            # Unknown nets, empty regions and shared nets fail before meshing
+            resolve = getattr(self, "resolve_terminals", None)
+            if (
+                resolve is not None
+                and not terminal_errors
+                and self.geometry is not None
+                and len(self._terminals) >= 2
+                and self._mesh_by_net()
+            ):
+                try:
+                    resolve()
+                except Exception as error:
+                    message = error.args[0] if error.args else error
+                    errors.append(f"Terminals: {message}")
 
         if self._symmetry_planes and self.simulation_type not in (
             "driven",
@@ -1606,6 +1644,7 @@ class PalaceSimMixin(SolverSettingsMixin):
             surface_threads=mesh_config.surface_threads,
             verbosity=gmsh_verbosity,
             decimate_tolerance=decimate_tolerance,
+            split_conductors_by_net=self._mesh_by_net(),
         )
 
         # Store mesh_result for deferred config generation
@@ -2181,6 +2220,7 @@ class PalaceSimMixin(SolverSettingsMixin):
             hints=hints,
             electrostatic_config=electrostatic_config,
             terminals=terminals or [],
+            resolved_terminals=self._config_terminals(self._last_mesh_result.groups),
         )
 
         # Validate mesh and config unless this is a photonic workflow.
