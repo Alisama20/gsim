@@ -72,7 +72,13 @@ def test_write_uses_project_material_then_fallback_and_valid_mesh(
     assert resolved.materials["Si"].source == "project"
     assert resolved.materials["Si"].refractive_index == pytest.approx(3.475687046)
 
-    artifacts = simulation.write(tmp_path)
+    with pytest.warns(UserWarning, match="dispersion is not sent") as caught:
+        artifacts = simulation.write(tmp_path)
+    assert {
+        warning.filename
+        for warning in caught
+        if "dispersion is not sent" in str(warning.message)
+    } == {__file__}
     document = json.loads(artifacts.config_path.read_text(encoding="utf8"))
     mesh = meshio.read(artifacts.mesh_path)
 
@@ -114,6 +120,36 @@ def test_write_uses_project_material_then_fallback_and_valid_mesh(
 
     mesh_header = artifacts.mesh_path.read_text(encoding="utf8").splitlines()
     assert mesh_header[mesh_header.index("$MeshFormat") + 1] == "2.2 0 8"
+
+
+def test_enabled_dispersion_writes_dispersive_models(
+    tmp_path,
+    fdtd_pdk_module,
+) -> None:
+    simulation = fdtd.Simulation(
+        pdk=fdtd_pdk_module,
+        mesh_size_nm=750,
+        domain={"padding": 0.25},
+        pml_cells=16,
+        num_wavelengths=3,
+        default_port="o1",
+    )
+    simulation.materials(dispersion=True)
+    simulation.geometry("straight", settings={"length": 2.0})
+
+    artifacts = simulation.write(tmp_path)
+    document = json.loads(artifacts.config_path.read_text(encoding="utf8"))
+
+    silicon_table = document["materials"]["Si"]["dispersion"]["table"]
+    assert np.interp(
+        1550, silicon_table["wavelength_nm"], silicon_table["n"]
+    ) == pytest.approx(3.475687046, abs=1e-5)
+    assert document["materials"]["SiO2"]["dispersion"]["sellmeier"]["b"] == [
+        0.6961663,
+        0.4079426,
+        0.8974794,
+    ]
+    assert document["background_refractive_index"] == pytest.approx(1.4440236217)
 
 
 def test_write_keeps_background_level_without_polygons(
