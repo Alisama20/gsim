@@ -116,6 +116,32 @@ def test_write_uses_project_material_then_fallback_and_valid_mesh(
     assert mesh_header[mesh_header.index("$MeshFormat") + 1] == "2.2 0 8"
 
 
+def test_write_keeps_background_level_without_polygons(
+    tmp_path,
+    fdtd_pdk_module,
+) -> None:
+    buried_oxide = fdtd_pdk_module.PDK.layer_stack.layers["buried_oxide"]
+    object.__setattr__(buried_oxide, "background", True)
+    object.__setattr__(buried_oxide, "background_exclude_layers", ())
+    simulation = fdtd.Simulation(
+        pdk=fdtd_pdk_module,
+        mesh_size_nm=750,
+        domain={"padding": 0.25},
+        pml_cells=16,
+        num_wavelengths=3,
+        default_port="o1",
+    )
+    resolved = simulation.geometry("straight", settings={"length": 2.0})
+
+    assert resolved.layers["buried_oxide"].geometry.area == pytest.approx(2.0 * 0.5)
+
+    artifacts = simulation.write(tmp_path)
+    mesh = meshio.read(artifacts.mesh_path)
+
+    assert "buried_oxide" in mesh.field_data
+    assert "buried_oxide" in artifacts.manifest.layers
+
+
 @pytest.mark.parametrize("simulation_class", [fdtd.Simulation, ArtifactSimulation])
 def test_write_uses_lf_line_endings(
     tmp_path, fdtd_pdk_module, monkeypatch, simulation_class
