@@ -50,8 +50,10 @@ class SolverSettingsMixin:
         legacy = {name: values.pop(name) for name in _PROBLEM_GROUPS if name in values}
         if legacy:
             solver = values.get("solver", {})
-            if isinstance(solver, BaseModel):
-                solver = solver.model_dump()
+            if isinstance(solver, SolverConfig):
+                solver = {**solver.model_dump(), "linear": solver.linear}
+            elif isinstance(solver, BaseModel):
+                solver = solver.model_dump(exclude_unset=True)
             if not isinstance(solver, dict):
                 raise ValueError("solver must be a SolverConfig or dictionary")
             solver = solver.copy()
@@ -71,7 +73,7 @@ class SolverSettingsMixin:
         self,
         *,
         order: int = _DEFAULT_SOLVER.order,
-        tolerance: float = _DEFAULT_SOLVER.linear.tolerance,
+        tolerance: float | None = None,
         max_iterations: int = _DEFAULT_SOLVER.linear.max_iterations,
         solver_type: Literal["Default", "SuperLU", "STRUMPACK", "MUMPS"] = (
             _DEFAULT_SOLVER.linear.solver_type
@@ -80,11 +82,15 @@ class SolverSettingsMixin:
             _DEFAULT_SOLVER.linear.preconditioner
         ),
         device: Literal["CPU", "GPU"] = _DEFAULT_SOLVER.device,
+        mg_max_levels: int = _DEFAULT_SOLVER.linear.mg_max_levels,
+        pc_mat_real: bool = _DEFAULT_SOLVER.linear.pc_mat_real,
+        complex_coarse_solve: bool = _DEFAULT_SOLVER.linear.complex_coarse_solve,
     ) -> None:
         """Set common solver controls, preserving problem-specific settings.
 
-        Defaults match ``SolverConfig()``: order 2, linear tolerance 1e-6,
-        400 iterations, default backend/preconditioner, and CPU. Set individual
+        Defaults match the simulation constructor: order 2, complex MUMPS
+        multigrid, 400 iterations, and CPU. Linear tolerance is 1e-9 for
+        eigenmode simulations and 1e-6 otherwise. Set individual
         controls directly through ``sim.solver`` to retain other common values.
 
         Example:
@@ -96,10 +102,17 @@ class SolverSettingsMixin:
                 order=order,
                 device=device,
                 linear=LinearSolverConfig(
-                    tolerance=tolerance,
+                    tolerance=(
+                        type(self.solver)().linear.tolerance
+                        if tolerance is None
+                        else tolerance
+                    ),
                     max_iterations=max_iterations,
                     solver_type=solver_type,
                     preconditioner=preconditioner,
+                    mg_max_levels=mg_max_levels,
+                    pc_mat_real=pc_mat_real,
+                    complex_coarse_solve=complex_coarse_solve,
                 ),
             )
         )
@@ -108,7 +121,7 @@ class SolverSettingsMixin:
         self,
         *,
         order: int | _UnsetOrder = _UnsetOrder.DEFAULT,
-        tolerance: float = _DEFAULT_SOLVER.linear.tolerance,
+        tolerance: float | None = None,
         max_iterations: int = _DEFAULT_SOLVER.linear.max_iterations,
         solver_type: Literal["Default", "SuperLU", "STRUMPACK", "MUMPS"] = (
             _DEFAULT_SOLVER.linear.solver_type
@@ -117,6 +130,9 @@ class SolverSettingsMixin:
             _DEFAULT_SOLVER.linear.preconditioner
         ),
         device: Literal["CPU", "GPU"] = _DEFAULT_SOLVER.device,
+        mg_max_levels: int = _DEFAULT_SOLVER.linear.mg_max_levels,
+        pc_mat_real: bool = _DEFAULT_SOLVER.linear.pc_mat_real,
+        complex_coarse_solve: bool = _DEFAULT_SOLVER.linear.complex_coarse_solve,
     ) -> None:
         """Deprecated alias for set_solver, with the same order-2 defaults.
 
@@ -144,6 +160,9 @@ class SolverSettingsMixin:
             solver_type=solver_type,
             preconditioner=preconditioner,
             device=device,
+            mg_max_levels=mg_max_levels,
+            pc_mat_real=pc_mat_real,
+            complex_coarse_solve=complex_coarse_solve,
         )
 
     @property
@@ -165,7 +184,7 @@ class SolverSettingsMixin:
         if isinstance(value, SolverConfig):
             value = {name: getattr(value, name) for name in SolverConfig.model_fields}
         elif isinstance(value, NumericalConfig):
-            value = value.model_dump()
+            value = value.model_dump(exclude_unset=True)
         common = SolverConfig.model_validate(value)
         # Replace atomically so callers retaining the old object can restore it.
         # Keep problem model objects so references to those settings stay live.
