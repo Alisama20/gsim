@@ -881,6 +881,10 @@ def upload_simulation_dir(
         input_hash: Optional cache key recorded with the job. Silently
             dropped when the installed SDK does not support it.
 
+    Palace and FDTD counts are read from root-level ``metadata.json`` and sent
+    as ``sizing_requirements`` to DataLab, including with older SDK versions.
+    Other submissions retain the SDK's existing fixed-resource upload path.
+
     Returns:
         PreJob object from gdsfactoryplus
 
@@ -898,7 +902,14 @@ def upload_simulation_dir(
                 "Installed gdsfactoryplus does not accept input_hash; "
                 "uploading without a cache key"
             )
+    from gsim._cloud_submission import read_sizing_requirements, upload_sized_simulation
+
+    requirements = read_sizing_requirements(input_dir, job_type)
     try:
+        if requirements is not None:
+            return upload_sized_simulation(
+                input_dir, job_type.casefold(), requirements, input_hash=input_hash
+            )
         return sim.upload_simulation(
             path=input_dir, job_definition=job_definition, **kwargs
         )
