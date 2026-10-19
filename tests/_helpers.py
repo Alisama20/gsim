@@ -11,7 +11,7 @@ def skip_without_devsim() -> None:
     """Skip the caller when DEVSIM cannot be imported.
 
     Goes through :func:`gsim.tcad.runtime.require_devsim` rather than a
-    bare import, so the first import picks up devsim-openblas the way a
+    bare import, so the first import picks up scipy-openblas32 the way a
     user's does: DEVSIM loads its BLAS/LAPACK library only on that first
     import, and cannot initialise again in the same process after a
     failure. ``pytest.importorskip("devsim")`` would bypass both.
