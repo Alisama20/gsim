@@ -30,22 +30,17 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    PrivateAttr,
     ValidationInfo,
     field_validator,
 )
 
-from gsim.common import Geometry, LayerStack
-from gsim.palace.base import PalaceSimMixin
+from gsim.palace.base import _PalaceSimBase
 from gsim.palace.models import (
     BoundaryModeConfig,
     BoundaryModeSolverConfig,
     ContactSpec,
     CrossSectionPlaneConfig,
     InterfaceSpec,
-    MaterialConfig,
-    MeshConfig,
-    RefinementConfig,
 )
 from gsim.palace.models.results import ValidationResult
 from gsim.palace.models.solver import warn_legacy_solver_setting
@@ -131,7 +126,7 @@ class ModePath(BaseModel):
         return cleaned
 
 
-class BoundaryModeSim(PalaceSimMixin, BaseModel):
+class BoundaryModeSim(_PalaceSimBase):
     """Boundary mode simulation for 2D waveguide cross-section analysis.
 
     This class configures Palace ``BoundaryMode`` simulations used to compute
@@ -140,16 +135,7 @@ class BoundaryModeSim(PalaceSimMixin, BaseModel):
     is declared as a :class:`ModePath` through :meth:`add_impedance_path`.
     """
 
-    model_config = ConfigDict(
-        validate_assignment=True,
-        arbitrary_types_allowed=True,
-    )
-
     simulation_type: Literal["boundarymode"] = "boundarymode"
-
-    # Composed objects
-    geometry: Geometry | None = None
-    stack: LayerStack | None = None
 
     # Boundary mode config
     cross_section: CrossSectionPlaneConfig | None = None
@@ -159,34 +145,12 @@ class BoundaryModeSim(PalaceSimMixin, BaseModel):
     #: first under index 1, the second under 2, and so on.
     mode_paths: list[ModePath] = Field(default_factory=list)
 
-    # Unused in boundary mode (kept for mixin compatibility)
-
-    # Mesh and solver config
-    mesh_config: MeshConfig = Field(default_factory=MeshConfig.default)
-    materials: dict[str, MaterialConfig] = Field(default_factory=dict)
     solver: BoundaryModeSolverConfig = Field(default_factory=BoundaryModeSolverConfig)
-    refinement: RefinementConfig = Field(default_factory=RefinementConfig)
     absorbing_boundary: bool = False
     #: Put a perfect-conductor condition on the outer wall of the meshed
     #: domain, making the mode solve a shielded one. Off, Palace's own
     #: default for an unconditioned outer boundary applies, which is PMC.
     metallic_boundaries: bool = False
-
-    # Stack configuration (stored as kwargs until resolved)
-    _stack_kwargs: dict[str, Any] = PrivateAttr(default_factory=dict)
-    _pec_blocks: list = PrivateAttr(default_factory=list)
-    _symmetry_planes: list = PrivateAttr(default_factory=list)
-    _hints: dict[str, Any] = PrivateAttr(default_factory=dict)
-    _impedance_boundaries: list = PrivateAttr(default_factory=list)
-    _airbox_config: dict[str, Any] = PrivateAttr(default_factory=dict)
-
-    # Internal state
-    _output_dir: Path | None = PrivateAttr(default=None)
-    _last_mesh_result: Any = PrivateAttr(default=None)
-    _last_ports: list = PrivateAttr(default_factory=list)
-
-    # Cloud job state
-    _job_id: str | None = PrivateAttr(default=None)
 
     @property
     def boundary_mode(self) -> BoundaryModeConfig:

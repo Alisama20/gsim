@@ -10,10 +10,11 @@ import logging
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
+from gsim.common.cloud import CloudJobMixin, submit
 from gsim.meep.models.api import (
     FDTD,
     Domain,
@@ -262,7 +263,7 @@ def _precompute_cross_section_geometry(
     )
 
 
-class Simulation(BaseModel):
+class Simulation(CloudJobMixin, BaseModel):
     """Declarative MEEP FDTD simulation container.
 
     Assigns typed physics objects, then calls ``write_config()`` to
@@ -335,11 +336,7 @@ class Simulation(BaseModel):
     # Extra hints forwarded into the config JSON (not part of the schema).
     _hints: dict[str, Any] = PrivateAttr(default_factory=dict)
 
-    # Cloud job state (set by upload/run)
-    _job_id: str | None = PrivateAttr(default=None)
-    _config_dir: Path | None = PrivateAttr(default=None)
-    _input_hash: str | None = PrivateAttr(default=None)
-    _estimated_runtime_seconds: float | None = PrivateAttr(default=None)
+    _cloud_job_type: ClassVar[str] = "meep"
 
     # PDK overlay (foundry-specific material values, loaded from YAML)
     _pdk_overlay: dict[str, Any] | None = PrivateAttr(default=None)
@@ -1091,21 +1088,12 @@ class Simulation(BaseModel):
         tmp = Path(tempfile.mkdtemp(prefix="meep_mode_solver_"))
         try:
             self.write_mode_solver_config(tmp)
-            input_hash = None
-            if check_cache:
-                input_hash, cached_job_id = gcloud.check_cache_for_dir(tmp, "meep")
-                if cached_job_id is not None:
-                    if verbose != "quiet":
-                        print(  # noqa: T201
-                            f"Cache hit: reusing job {cached_job_id}"
-                        )
-                    result = gcloud.wait_for_results(cached_job_id, verbose=verbose)
-                    self._enrich_mode_results(result)
-                    return result
-
-            job_id = gcloud.upload(tmp, "meep", verbose=False, input_hash=input_hash)
-            gcloud.start(job_id, verbose=verbose != "quiet")
-            result = gcloud.wait_for_results(job_id, verbose=verbose)
+            submission = submit(tmp, "meep", check_cache=check_cache, verbose=verbose)
+            result = gcloud.wait_for_results(
+                submission.job_id,
+                verbose=verbose,
+                estimated_runtime_seconds=submission.estimated_runtime_seconds,
+            )
             self._enrich_mode_results(result)
             return result
         finally:
@@ -1913,96 +1901,12 @@ class Simulation(BaseModel):
     # -------------------------------------------------------------------------
 
     def _prepare_upload_dir(self) -> Path:
-        """Write the config files to a fresh temp directory for upload.
-
-        Returns:
-            Path to the temp directory, also recorded on ``_config_dir``.
-        """
+        """Write the config files to a fresh staging directory for upload."""
         import tempfile
 
         tmp = Path(tempfile.mkdtemp(prefix="meep_"))
         self.write_config(tmp)
-        self._config_dir = tmp
         return tmp
-
-    def upload(self, *, verbose: bool = True) -> str:
-        """Write config and upload to the cloud. Does NOT start execution.
-
-        Args:
-            verbose: Print progress messages.
-
-        Returns:
-            ``job_id`` string for use with :meth:`start`, :meth:`get_status`,
-            or :func:`gsim.wait_for_results`.
-        """
-        from gsim import gcloud
-        from gsim.hashing import compute_input_hash
-
-        tmp = self._prepare_upload_dir()
-        self._estimated_runtime_seconds = gcloud.estimate_runtime_seconds(tmp)
-        self._input_hash = compute_input_hash(tmp, "meep")
-        self._job_id = gcloud.upload(
-            tmp, "meep", verbose=verbose, input_hash=self._input_hash
-        )
-        return self._job_id
-
-    def start(self, *, verbose: bool = True) -> None:
-        """Start cloud execution for this sim's uploaded job.
-
-        Raises:
-            ValueError: If :meth:`upload` has not been called.
-        """
-        from gsim import gcloud
-
-        if self._job_id is None:
-            raise ValueError("Call upload() first")
-        gcloud.start(self._job_id, verbose=verbose)
-
-    def get_status(self) -> str:
-        """Get the current status of this sim's cloud job.
-
-        Returns:
-            Status string (``"created"``, ``"queued"``, ``"running"``,
-            ``"completed"``, ``"failed"``).
-
-        Raises:
-            ValueError: If no job has been submitted yet.
-        """
-        from gsim import gcloud
-
-        if self._job_id is None:
-            raise ValueError("No job submitted yet")
-        return gcloud.get_status(self._job_id)
-
-    def wait_for_results(
-        self,
-        *,
-        verbose: Literal["quiet", "status", "full"] = "status",
-        parent_dir: str | Path | None = None,
-    ) -> Any:
-        """Wait for this sim's cloud job, download and parse results.
-
-        Args:
-            verbose: ``"quiet"`` no output, ``"status"`` status line,
-                ``"full"`` stream solver logs.
-            parent_dir: Where to create the sim-data directory.
-
-        Returns:
-            Parsed result (typically ``SParameterResult``).
-
-        Raises:
-            ValueError: If no job has been submitted yet.
-        """
-        from gsim import gcloud
-
-        if self._job_id is None:
-            raise ValueError("No job submitted yet")
-        return gcloud.wait_for_results(
-            self._job_id,
-            verbose=verbose,
-            parent_dir=parent_dir,
-            estimated_runtime_seconds=getattr(self, "_estimated_runtime_seconds", None),
-        )
 
     # -------------------------------------------------------------------------
     # run
@@ -2015,6 +1919,7 @@ class Simulation(BaseModel):
         verbose: Literal["quiet", "status", "full"] = "status",
         wait: bool = True,
         check_cache: bool = False,
+        poll_interval: float = 5.0,
     ) -> Any:
         """Run MEEP simulation on the cloud.
 
@@ -2022,40 +1927,26 @@ class Simulation(BaseModel):
             parent_dir: Where to create the sim directory.
                 Defaults to the current working directory.
             verbose: ``"quiet"`` no output, ``"status"`` status line,
-                ``"full"`` stream solver logs.
+                ``"full"`` stream solver logs and raise MEEP's own verbosity.
             wait: If ``True`` (default), block until results are ready.
                 If ``False``, upload + start and return the ``job_id``.
             check_cache: If ``True``, look for a completed cloud job with
                 byte-identical inputs and reuse its results instead of
                 submitting. A lookup failure degrades to a normal submit.
+            poll_interval: Seconds between status polls while waiting.
 
         Returns:
             ``SParameterResult`` when ``wait=True``, or ``job_id`` string
             when ``wait=False``.
         """
-        from gsim import gcloud
-
         self._run_verbose = verbose
-        if check_cache:
-            tmp = self._prepare_upload_dir()
-            self._estimated_runtime_seconds = gcloud.estimate_runtime_seconds(tmp)
-            self._input_hash, cached_job_id = gcloud.check_cache_for_dir(tmp, "meep")
-            if cached_job_id is not None:
-                self._job_id = cached_job_id
-                if verbose != "quiet":
-                    print(f"Cache hit: reusing job {cached_job_id}")  # noqa: T201
-                if not wait:
-                    return self._job_id
-                return self.wait_for_results(verbose=verbose, parent_dir=parent_dir)
-            self._job_id = gcloud.upload(
-                tmp, "meep", verbose=False, input_hash=self._input_hash
-            )
-        else:
-            self.upload(verbose=False)
-        self.start(verbose=verbose != "quiet")
-        if not wait:
-            return self._job_id
-        return self.wait_for_results(verbose=verbose, parent_dir=parent_dir)
+        return super().run(
+            parent_dir,
+            verbose=verbose,
+            wait=wait,
+            check_cache=check_cache,
+            poll_interval=poll_interval,
+        )
 
     def run_local(
         self,

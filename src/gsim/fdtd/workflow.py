@@ -6,12 +6,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from math import isfinite
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, mkdtemp
 from typing import Any, Self
 
 import gdsfactory as gf
 from pdk_schema import Index, ScalarValue
 
+from gsim.common.cloud import CloudJobMixin
 from gsim.common.materials import (
     MaterialResolutionError,
     MaterialSnapshot,
@@ -35,7 +36,6 @@ from gsim.fdtd.api import (
     Solver,
     SourceType,
 )
-from gsim.fdtd.cloud import CloudWorkflowMixin
 from gsim.fdtd.mesh import generate_mesh
 from gsim.fdtd.metadata import write_metadata
 from gsim.fdtd.models import (
@@ -98,8 +98,10 @@ def _constant_material_card(name: str, refractive_index: float) -> Any:
     )
 
 
-class Simulation(CloudWorkflowMixin, RuntimeConfigMixin):
+class Simulation(CloudJobMixin, RuntimeConfigMixin):
     """Configure, serialize, and run a GDSFactory FDTD simulation."""
+
+    _cloud_job_type = "fdtd"
 
     def __init__(
         self,
@@ -138,9 +140,6 @@ class Simulation(CloudWorkflowMixin, RuntimeConfigMixin):
         self.solver = Solver.model_validate(solver_data)
         self.geometry.bind(self._resolve_geometry)
         self._resolved: ResolvedPassivePcell | None = None
-        self._job_id: str | None = None
-        self._input_hash: str | None = None
-        self._config_dir: Path | None = None
         self._last_artifacts: SimulationArtifacts | None = None
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -370,6 +369,12 @@ class Simulation(CloudWorkflowMixin, RuntimeConfigMixin):
                 card=_constant_material_card(name, material.refractive_index),
             )
         return snapshots
+
+    def _prepare_upload_dir(self) -> Path:
+        """Write the cloud artifacts to a fresh staging directory."""
+        directory = Path(mkdtemp(prefix="fdtd_"))
+        self.write(directory)
+        return directory
 
     def write(self, output_dir: str | Path) -> SimulationArtifacts:
         """Write ``mesh.msh`` and ``config.json`` for cloud execution."""
