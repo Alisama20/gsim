@@ -186,6 +186,56 @@ def _electrostatic_net_boundaries(
     return boundaries
 
 
+#: Physical axis (0=x, 1=y, 2=z) behind each of the mesh's x, y and z, for a
+#: cross-section whose plane normal is the key. The native 2D mesh puts the
+#: in-plane coordinate on mesh x, the vertical one on mesh y and the
+#: propagation direction (the plane normal) on mesh z.
+_SECTION_FRAME_AXES: dict[str, tuple[int, int, int]] = {
+    "x": (1, 2, 0),  # x=<v> plane: mesh (x, y, z) = (y, z, x)
+    "y": (0, 2, 1),  # y=<v> plane: mesh (x, y, z) = (x, z, y)
+}
+_TENSOR_KEYS = ("permittivity", "permeability", "conductivity", "loss_tangent")
+
+
+def _to_section_frame(props: dict[str, Any], axis: str) -> dict[str, Any]:
+    """Write a material's diagonal tensors in the 2D mesh's own axes.
+
+    Palace reads a tensor in the frame of the mesh file. A native 2D
+    cross-section is meshed with the in-plane coordinate on mesh x, the
+    vertical coordinate on mesh y and the propagation direction on mesh z, so
+    a ``[xx, yy, zz]`` given in layout axes has to be re-ordered: ``(yy, zz,
+    xx)`` for an ``x=...`` plane and ``(xx, zz, yy)`` for a ``y=...`` plane.
+    Scalars are unchanged.
+
+    Args:
+        props: Material properties in layout axes (not modified).
+        axis: Normal of the cross-section plane.
+
+    Returns:
+        The properties with every three-component tensor re-ordered.
+
+    Raises:
+        ValueError: For ``material_axes`` other than the identity, whose
+            frame change is not implemented.
+    """
+    order = _SECTION_FRAME_AXES.get(axis)
+    if order is None:
+        return props
+    axes = props.get("material_axes")
+    if axes is not None and not np.allclose(np.asarray(axes, dtype=float), np.eye(3)):
+        raise ValueError(
+            "material_axes other than the identity are not supported on a "
+            "BoundaryMode cross-section yet: the tensor would have to be "
+            "rotated into the mesh frame."
+        )
+    out = dict(props)
+    for key in _TENSOR_KEYS:
+        value = props.get(key)
+        if isinstance(value, list | tuple) and len(value) == 3:
+            out[key] = [value[i] for i in order]
+    return out
+
+
 def generate_palace_config(
     groups: dict,
     ports: list[PalacePort],
@@ -369,6 +419,14 @@ def generate_palace_config(
         stack_materials = resolve_palace_materials_at_frequency(
             stack.materials, boundary_mode_config.freq
         )
+        # The 2D mesh has its own axes (see _to_section_frame); the tensors
+        # are written in them, not in the layout's.
+        section_axis = (hints or {}).get("_cross_section_axis")
+        if section_axis is not None:
+            stack_materials = {
+                name: _to_section_frame(props, section_axis)
+                for name, props in stack_materials.items()
+            }
 
     # Support material keys with different capitalization conventions
     # between stack layers and material dictionaries.

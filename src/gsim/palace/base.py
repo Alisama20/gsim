@@ -2221,6 +2221,12 @@ class PalaceSimMixin(SolverSettingsMixin):
             if postprocessing:
                 hints["_mode_postprocessing"] = postprocessing
 
+        # The 2D mesh of a cross-section has its own axes; the config
+        # generator writes material tensors in them (_to_section_frame).
+        cross_section = getattr(self, "cross_section", None)
+        if self.simulation_type == "boundarymode" and cross_section is not None:
+            hints["_cross_section_axis"] = cross_section.axis
+
         config_path = gen_write_config(
             mesh_result=self._last_mesh_result,
             stack=stack,
