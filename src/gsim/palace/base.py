@@ -2001,7 +2001,10 @@ class PalaceSimMixin(SolverSettingsMixin):
             merge_via_distance: Max gap (um) between nearby via polygons to
                 merge before extrusion. Pass 0 to disable merging (keep
                 each via as a separate volume). Defaults to the preset's
-                value (typically 2.0 um).
+                value (typically 2.0 um). Merging fills the gaps between
+                the vias, so a dense via array can grow to several times
+                its drawn area; a warning is logged when the area grows
+                by more than 5%.
             curve_fit_mode: Patterned dielectric boundary mode (line/spline/bspline).
             curve_fit_layers: Layer names where spline fitting is applied.
             curve_fit_tolerance_um: Point merge tolerance before fitting.

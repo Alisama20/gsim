@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal
 
 import klayout.db as kdb
 from shapely import Polygon as ShapelyPolygon
-from shapely import buffer
+from shapely import STRtree, buffer, make_valid
 from shapely.ops import unary_union
 
 from gsim.palace.ports.config import PortType
@@ -38,6 +38,10 @@ if TYPE_CHECKING:
     from gsim.palace.ports.config import PalacePort
 
 logger = logging.getLogger(__name__)
+
+# Merging vias warns when the merged area is more than this factor of the
+# drawn area (the gaps between nearby vias get filled in)
+VIA_MERGE_AREA_WARN_RATIO = 1.05
 
 
 def _contains_air_token(name: str | None) -> bool:
@@ -574,6 +578,96 @@ def _merge_via_polygons(
     return result
 
 
+def _via_shapes(
+    polys: list[tuple[list[float], list[float], list]],
+) -> list[ShapelyPolygon]:
+    """Shapely polygons (holes included) of ``(pts_x, pts_y, holes)`` tuples."""
+    shapes = []
+    for pts_x, pts_y, holes in polys:
+        if len(pts_x) < 3:
+            continue
+        shape = ShapelyPolygon(
+            list(zip(pts_x, pts_y, strict=True)),
+            [list(zip(hx, hy, strict=True)) for hx, hy in holes],
+        )
+        if not shape.is_valid:
+            shape = make_valid(shape)
+        shapes.append(shape)
+    return shapes
+
+
+def _smallest_via_gap(shapes: list[ShapelyPolygon]) -> float:
+    """Smallest distance (um) from a via polygon to its nearest neighbour."""
+    if len(shapes) < 2:
+        return 0.0
+    tree = STRtree(shapes)
+    _, distances = tree.query_nearest(
+        shapes, return_distance=True, all_matches=False, exclusive=True
+    )
+    return float(distances.min()) if len(distances) else 0.0
+
+
+def _warn_if_via_merge_inflates_area(
+    layer_name: str,
+    drawn: list[tuple[list[float], list[float], list]],
+    merged: list[tuple[list[float], list[float], list]],
+    merge_distance: float,
+) -> float | None:
+    """Log one warning when merging made a via layer cover more area.
+
+    Merging fills the gaps between vias that are closer than the merge
+    distance, so a dense array of small cuts becomes one slab. The areas are
+    compared with the holes subtracted and overlapping drawn vias counted once.
+
+    Args:
+        layer_name: Name of the via layer, for the message.
+        drawn: The via polygons as drawn, ``(pts_x, pts_y, holes)`` tuples.
+        merged: What :func:`_merge_via_polygons` made of *drawn*.
+        merge_distance: The merge distance used, in um.
+
+    Returns:
+        merged area / drawn area, or None when nothing was merged.
+    """
+    n_drawn, n_merged = len(drawn), len(merged)
+    if n_merged >= n_drawn:
+        return None
+    drawn_shapes = _via_shapes(drawn)
+    drawn_area = unary_union(drawn_shapes).area
+    if drawn_area <= 0:
+        return None
+    merged_area = unary_union(_via_shapes(merged)).area
+    ratio = merged_area / drawn_area
+    if ratio <= VIA_MERGE_AREA_WARN_RATIO:
+        return ratio
+
+    gap = _smallest_via_gap(drawn_shapes)
+    # Merging reaches a little further than merge_distance: the offset has a
+    # 0.01 um margin on each side and mitre joins reach sqrt(2) times as far at
+    # corners, so suggest a third of the gap.
+    if gap > 0.06:
+        fix = (
+            f"merge_via_distance={gap / 3:.2g} (below the smallest gap between "
+            f"vias, {gap:.3g} um) or merge_via_distance=0"
+        )
+    else:
+        fix = "merge_via_distance=0 (some vias touch or are closer than 0.06 um)"
+    logger.warning(
+        "Via layer '%s': merge_via_distance=%g um merged %d via polygons into %d "
+        "volume(s) and grew the via area by a factor of %.2f (drawn %.4g um^2, "
+        "merged %.4g um^2), because the gaps between nearby vias are filled in. "
+        "Pass %s to keep the cuts as drawn.",
+        layer_name,
+        merge_distance,
+        n_drawn,
+        n_merged,
+        ratio,
+        drawn_area,
+        merged_area,
+        fix,
+    )
+    return ratio
+
+
 def _is_covered_by_dielectric_box(layer, stack: LayerStack) -> bool:
     """Check if a layer is already represented as a bulk box in stack.dielectrics.
 
@@ -799,6 +893,12 @@ def add_metals(
             # Merge nearby via polygons before creating gmsh surfaces
             if layer_type == "via":
                 polys = _merge_via_polygons(polys, merge_via_distance)
+                _warn_if_via_merge_inflates_area(
+                    layer_name,
+                    polygons_by_layer[layernum],
+                    polys,
+                    merge_via_distance,
+                )
 
             # Create surfaces for all polygons on this layer. Conductor, via
             # and shaped-dielectric contours can be curve-fitted (spline /
