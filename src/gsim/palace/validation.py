@@ -28,14 +28,28 @@ from gsim.palace._validation_models import (
     SolutionProvenance,
     SolutionReport,
 )
+from gsim.palace._validation_port_modes import (
+    CONTINUITY_RTOL,
+    MAX_EVIDENCE,
+    MIN_DISTINCT_FREQUENCIES,
+    NEIGHBOUR_COUNT,
+    PORT_AGREEMENT_RTOL,
+    check_port_mode_continuity,
+)
 
 __all__ = [
+    "CONTINUITY_RTOL",
+    "MAX_EVIDENCE",
+    "MIN_DISTINCT_FREQUENCIES",
+    "NEIGHBOUR_COUNT",
+    "PORT_AGREEMENT_RTOL",
     "AdaptiveCheck",
     "ModeExpectation",
     "ModeSample",
     "SolutionCheck",
     "SolutionProvenance",
     "SolutionReport",
+    "check_port_mode_continuity",
     "validate_solution",
 ]
 
@@ -170,6 +184,7 @@ def validate_solution(
     metadata: Mapping[str, object] | None = None,
     input_files: Mapping[str, str | Path] | None = None,
     expected_input_sha256: Mapping[str, str] | None = None,
+    ports_share_cross_section: bool = False,
 ) -> SolutionReport:
     """Build a report from a Palace log and optional independent evidence.
 
@@ -192,10 +207,19 @@ def validate_solution(
         input_files: Logical input names mapped to current local files to hash.
             Missing, unreadable and directory entries are unknown with a reason.
         expected_input_sha256: Optional independently recorded input manifest.
+        ports_share_cross_section: Set only when every wave port has the same
+            cross-section (width, stack and orientation up to a flip). Ports
+            solved at the same frequency must then also agree on ``n_eff``
+            (``port_mode_ports`` check). The log does not record the port
+            geometry, so gsim cannot infer this; the default skips the
+            port-to-port comparison.
 
     Returns:
         Independent checks and raw mode samples. Even an empty ``failures``
-        tuple does not establish that unknown or omitted checks passed.
+        tuple does not establish that unknown or omitted checks passed. Driven
+        wave-port solves are also checked for continuity of the selected mode
+        over frequency; see ``SolutionReport.port_mode_checks`` and
+        ``SolutionReport.warnings``.
     """
     lines = clean_lines(log)
     core, estimator = solver_checks(lines, estimator_disabled=estimator_disabled)
@@ -225,4 +249,7 @@ def validate_solution(
         ),
         mode_samples=samples,
         provenance=_provenance(metadata, input_files, expected_input_sha256),
+        port_mode_checks=check_port_mode_continuity(
+            samples, compare_ports=ports_share_cross_section
+        ),
     )

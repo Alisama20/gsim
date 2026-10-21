@@ -166,7 +166,8 @@ For new code, use `sim.solver.model_copy(deep=True)` to copy all solver settings
 - [`BoundaryModeConfig`][gsim.palace.BoundaryModeConfig]
 
 See [result validation](../palace-validation.md) for independent solver,
-adaptive sampling, mode identity, and provenance checks.
+adaptive sampling, mode identity, wave-port mode continuity, and
+provenance checks.
 
 ## Numeric wave-port boundaries
 
