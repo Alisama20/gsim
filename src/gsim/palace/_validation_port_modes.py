@@ -11,6 +11,7 @@ example close to cutoff or on a very coarse sweep, is flagged in the same way.
 
 from __future__ import annotations
 
+import itertools
 import math
 import statistics
 from collections import defaultdict
@@ -26,7 +27,12 @@ CONTINUITY_RTOL = 0.01
 neighbours (in frequency) before a point is flagged. The good points of the
 real test logs scatter by at most 0.05 %, the spurious solves differ by 17 % or
 more. A mode that really changes by more than this between neighbouring
-frequencies (close to cutoff, very coarse sweep) is flagged as well."""
+frequencies (close to cutoff, very coarse sweep) is flagged as well.
+
+When the neighbour median is exactly zero a relative distance is undefined. The
+point is then flagged when ``abs(n_eff)`` exceeds this same number, read as an
+absolute tolerance: ``n_eff`` is dimensionless and of order one, so ``0.01`` is
+a small absolute step."""
 
 PORT_AGREEMENT_RTOL = 0.005
 """Largest relative difference of ``n_eff`` between two ports solved at the same
@@ -122,6 +128,24 @@ def _summary(flagged: Sequence[str], total: int, what: str) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def _departure(n_eff: float, reference: float, rtol: float) -> str | None:
+    """Describe how ``n_eff`` departs from ``reference``; None if within ``rtol``.
+
+    The distance is relative to ``abs(reference)``. A reference of exactly zero
+    has no relative scale, so the absolute difference ``abs(n_eff)`` is compared
+    with ``rtol`` instead; this never divides by zero.
+    """
+    difference = abs(n_eff - reference)
+    if reference == 0:
+        if difference <= rtol:
+            return None
+        return f"neighbour median 0 (absolute difference {difference:.4g} > {rtol:.2g})"
+    if difference <= rtol * abs(reference):
+        return None
+    deviation = 100 * difference / abs(reference)
+    return f"neighbour median {reference:.4f} ({deviation:.2f} % > {100 * rtol:.2g} %)"
+
+
 def _continuity(series: dict[_Key, list[_Point]], rtol: float) -> SolutionCheck:
     """Flag points whose n_eff departs from the median of their frequency neighbours."""
     flagged: list[str] = []
@@ -146,13 +170,14 @@ def _continuity(series: dict[_Key, list[_Point]], rtol: float) -> SolutionCheck:
         judged += 1
         for index, (frequency, n_eff) in enumerate(finite):
             reference = _neighbour_median(finite, index)
-            if reference is None or abs(n_eff - reference) <= rtol * abs(reference):
+            if reference is None:
                 continue
-            deviation = 100 * abs(n_eff - reference) / abs(reference)
+            departure = _departure(n_eff, reference, rtol)
+            if departure is None:
+                continue
             flagged.append(
                 f"{_label(key)}: n_eff = {n_eff:.4f} at {frequency:.4g} GHz, "
-                f"neighbour median {reference:.4f} "
-                f"({deviation:.2f} % > {100 * rtol:.2g} %)"
+                f"{departure}"
             )
     if flagged:
         return SolutionCheck(
@@ -172,23 +197,27 @@ def _continuity(series: dict[_Key, list[_Point]], rtol: float) -> SolutionCheck:
 
 
 def _port_agreement(series: dict[_Key, list[_Point]], rtol: float) -> SolutionCheck:
-    """Flag frequencies where ports solved for the same mode disagree in n_eff."""
+    """Flag frequencies where ports solved for the same mode disagree in n_eff.
+
+    Every pair of ports that has the same mode and excitation is compared at the
+    frequencies both were solved at. Pairs without a common frequency are noted
+    and do not hide the pairs that can be compared.
+    """
     groups: dict[tuple[int, int | None], dict[int, list[_Point]]] = defaultdict(dict)
     for (port, mode, excitation), points in series.items():
         groups[mode, excitation][port] = points
     flagged: list[str] = []
     notes: list[str] = []
     compared = 0
+    port_pairs: set[tuple[int, int]] = set()  # distinct pairs that were compared
+    worst: tuple[float, str] | None = None  # (difference in %, description)
     ordered = sorted(
         groups.items(),
         key=lambda item: (-1 if item[0][1] is None else item[0][1], item[0][0]),
     )
     for (mode, excitation), ports in ordered:
-        if len(ports) < 2:
-            continue
-        first, *others = sorted(ports)
         where = "" if excitation is None else f", excitation {excitation}"
-        for other in others:
+        for first, other in itertools.combinations(sorted(ports), 2):
             reference = defaultdict(list)
             for frequency, n_eff in ports[first]:
                 reference[frequency].append(n_eff)
@@ -199,26 +228,34 @@ def _port_agreement(series: dict[_Key, list[_Point]], rtol: float) -> SolutionCh
                     scale = max(abs(n_first), abs(n_eff))
                     if not (math.isfinite(n_first) and math.isfinite(n_eff)):
                         continue  # reported by the continuity check
-                    if abs(n_first - n_eff) > rtol * scale:
-                        flagged.append(
-                            f"mode {mode}{where}: ports {first} and {other} differ "
-                            f"by {100 * abs(n_first - n_eff) / scale:.2f} % at "
-                            f"{frequency:.4g} GHz (n_eff {n_first:.4f} vs {n_eff:.4f}, "
-                            f"limit {100 * rtol:.2g} %)"
-                        )
+                    difference = abs(n_first - n_eff)
+                    if difference <= rtol * scale:
+                        continue
+                    percent = 100 * difference / scale
+                    flagged.append(
+                        f"mode {mode}{where}: ports {first} and {other} differ "
+                        f"by {percent:.2f} % at {frequency:.4g} GHz "
+                        f"(n_eff {n_first:.4f} vs {n_eff:.4f}, "
+                        f"limit {100 * rtol:.2g} %)"
+                    )
+                    if worst is None or percent > worst[0]:
+                        text = f"worst pair: mode {mode}{where}: "
+                        text += f"ports {first} and {other} differ by {percent:.2f} %"
+                        worst = (percent, f"{text} at {frequency:.4g} GHz.")
             if shared:
                 compared += shared
+                port_pairs.add((first, other))
             else:
                 notes.append(
                     f"mode {mode}{where}: ports {first} and {other} share no "
                     "solve frequency; not compared."
                 )
     if flagged:
-        return SolutionCheck(
-            PORT_AGREEMENT_CHECK,
-            "warning",
-            _summary(flagged, compared, "port pairs"),
-        )
+        lines = list(_summary(flagged, compared, "port pairs"))
+        if worst is not None and len(port_pairs) > 1:
+            # With several port pairs the listed points may omit the worst one.
+            lines.insert(1, worst[1])
+        return SolutionCheck(PORT_AGREEMENT_CHECK, "warning", tuple(lines))
     if not compared:
         return SolutionCheck(
             PORT_AGREEMENT_CHECK,
@@ -254,6 +291,12 @@ def check_port_mode_continuity(
     and the neighbour median. A series with fewer than
     ``MIN_DISTINCT_FREQUENCIES`` frequencies is ``"unknown"``.
 
+    A neighbour median of exactly zero has no relative scale. Such a point is
+    flagged when ``abs(n_eff - median) = abs(n_eff)`` is larger than ``rtol``,
+    taken as an absolute tolerance, and the evidence gives the absolute
+    difference instead of a percentage. A series that is zero everywhere is
+    therefore not flagged. No input makes this function divide by zero.
+
     Args:
         samples: Port-mode observations, normally ``SolutionReport.mode_samples``.
             Observations without a frequency (eigenmode, boundary mode) are
@@ -261,8 +304,13 @@ def check_port_mode_continuity(
         compare_ports: Also require ports solved at the same frequency to agree
             within ``port_rtol``. Only set this when all ports share one
             cross-section: ports of different width or stack have different
-            modes and would be flagged wrongly.
-        rtol: Relative continuity tolerance of ``n_eff``.
+            modes and would be flagged wrongly. Every pair of ports with the
+            same mode and excitation is compared at the frequencies they have
+            in common; pairs without a common frequency are noted and do not
+            stop the other pairs from being compared. With more than one
+            comparable pair the evidence names the worst pair.
+        rtol: Relative continuity tolerance of ``n_eff`` (absolute when the
+            neighbour median is zero).
         port_rtol: Relative port-to-port tolerance of ``n_eff``.
 
     Returns:
