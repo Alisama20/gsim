@@ -407,6 +407,7 @@ def generate_palace_config(
     # computed with the true frequency-resolved permittivity (e.g. Sellmeier
     # silicon at 1550 nm) rather than the RF constant values.
     stack_materials = stack.materials
+    section_axis: str | None = None
     if driven_config is not None:
         from gsim.palace.materials import resolve_palace_materials_at_frequency
 
@@ -420,13 +421,8 @@ def generate_palace_config(
             stack.materials, boundary_mode_config.freq
         )
         # The 2D mesh has its own axes (see _to_section_frame); the tensors
-        # are written in them, not in the layout's.
+        # of the materials in the mesh are written in them, not in the layout's.
         section_axis = (hints or {}).get("_cross_section_axis")
-        if section_axis is not None:
-            stack_materials = {
-                name: _to_section_frame(props, section_axis)
-                for name, props in stack_materials.items()
-            }
 
     # Support material keys with different capitalization conventions
     # between stack layers and material dictionaries.
@@ -436,10 +432,13 @@ def generate_palace_config(
 
     def _lookup_material(name: str) -> dict[str, object]:
         props = stack_materials.get(name)
-        if isinstance(props, dict):
-            return props
-        fallback = _materials_by_lower.get(str(name).lower())
-        return fallback if isinstance(fallback, dict) else {}
+        if not isinstance(props, dict):
+            props = _materials_by_lower.get(str(name).lower())
+        if not isinstance(props, dict):
+            return {}
+        if section_axis is not None:
+            return _to_section_frame(props, section_axis)
+        return props
 
     materials: list[dict[str, object]] = []
     for volume_name, info in groups["volumes"].items():

@@ -1539,6 +1539,8 @@ def generate_mesh(
                     boundary_mode_config,
                     absorbing_boundary,
                     periodic_axis,
+                    # tensors are written in the 2D mesh frame (_to_section_frame)
+                    hints={"_cross_section_axis": cross_section.axis},
                 )
 
             return MeshResult(
