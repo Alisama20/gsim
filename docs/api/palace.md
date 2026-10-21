@@ -283,6 +283,9 @@ cap.pairs()  # every pair and every terminal-to-ground value, as a table
 - **Vias and merging.** `mesh()` merges vias closer than `merge_via_distance` (2 um by
   default). If that would join the vias of two nets it raises a `ValueError` naming the
   via layer and the nets; set `merge_via_distance` below the gap between them.
+  Merging also fills the gaps between vias, so their area grows; a warning names
+  the layer and the area ratio when it grows by more than 5%. Pass
+  `merge_via_distance=0` to keep every via as drawn.
 - **Changing the selection style.** A mesh made for layer terminals cannot serve net
   terminals and the other way round; `write_config()` raises and asks you to call
   `mesh()` again. In net mode `write_config()` also writes `terminals.json`, which

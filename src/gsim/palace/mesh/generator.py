@@ -1284,7 +1284,11 @@ def generate_mesh(
         symmetry_plane: Optional PEC/PMC symmetry plane; only the kept half of
             the domain is meshed. Not supported with ``boundarymode`` or with
             a ``periodic_axis`` equal to the plane axis.
-        merge_via_distance: Max gap between vias to merge (um)
+        merge_via_distance: Max gap between vias to merge (um). Merging
+            fills the gaps between the vias, so a dense via array can
+            grow to several times its drawn area; a warning is logged
+            when the area grows by more than 5%. Pass 0 to keep every
+            via as drawn.
         curve_fit_mode: Patterned dielectric boundary mode: line/spline/bspline
         curve_fit_layers: Layer names where curve fitting is applied
         curve_fit_tolerance_um: Point merge tolerance before curve fitting
