@@ -55,6 +55,7 @@ from gsim.common.stack.pn_junction import (
 )
 from gsim.palace import BoundaryModeSim
 from gsim.palace.mesh.generator import _fine_size_targets
+from tests._helpers import draw_rectangle
 
 # ---------------------------------------------------------------------------
 # Part 1: depletion model.
@@ -605,10 +606,8 @@ def _build_device(junction: PNJunctionConfig, **profile_kwargs):
     """Build the rib+slab+doping device and return (comp, stack)."""
     gf.gpdk.PDK.activate()
     comp = gf.Component()
-    wg = comp << gf.c.rectangle((10.0, 0.4), centered=True, layer=(1, 0))
-    wg.y = -20.0
-    slab = comp << gf.c.rectangle((10.0, 100.0), centered=True, layer=(3, 0))
-    slab.y = -5.0
+    draw_rectangle(comp, (1, 0), width=10.0, height=0.4, x0=-5.0, y=-20.0)
+    draw_rectangle(comp, (3, 0), width=10.0, height=100.0, x0=-5.0, y=-5.0)
 
     pn = make_pn_junction_profile(
         comp,

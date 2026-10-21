@@ -35,6 +35,26 @@ def series_rc_admittance(
     )
 
 
+def draw_rectangle(comp, layer, *, width: float, height: float, x0: float, y: float):
+    """Draw a ``width`` x ``height`` rectangle into ``comp``, centred on ``y``.
+
+    Drawn directly rather than through a cached ``gf.c.rectangle`` cell: a
+    cell cached before another test registers a PDK that names these GDS
+    numbers (IHP names ``(30, *)`` its Metal3 layers) keeps its shapes on a
+    layer index that ``(30, 0)`` no longer resolves to, and the region reads
+    as empty.
+    """
+    comp.add_polygon(
+        [
+            (x0, y - height / 2),
+            (x0 + width, y - height / 2),
+            (x0 + width, y + height / 2),
+            (x0, y + height / 2),
+        ],
+        layer=layer,
+    )
+
+
 def draw_pn_rib(
     *,
     center_y: float = -20.0,
@@ -59,10 +79,8 @@ def draw_pn_rib(
 
     gf.gpdk.PDK.activate()
     comp = gf.Component()
-    wg = comp << gf.c.rectangle((10.0, rib_width), centered=True, layer=(1, 0))
-    wg.y = center_y
-    slab = comp << gf.c.rectangle((10.0, 100.0), centered=True, layer=(3, 0))
-    slab.y = -5.0
+    draw_rectangle(comp, (1, 0), width=10.0, height=rib_width, x0=-5.0, y=center_y)
+    draw_rectangle(comp, (3, 0), width=10.0, height=100.0, x0=-5.0, y=-5.0)
 
     halves = {
         "n_rib": ((20, 0), (center_y - rib_width / 2, center_y)),
