@@ -81,15 +81,20 @@ def submit(
     Like :func:`upload_inputs`, but starts the uploaded job. A reused cached
     job is already finished, so it is announced instead of started.
     """
+    submission = upload_inputs(directory, job_type, check_cache=check_cache)
+    _start_or_announce(submission, verbose=verbose)
+    return submission
+
+
+def _start_or_announce(submission: Submission, *, verbose: Verbosity) -> None:
+    """Start an uploaded job, or announce the finished one a cache hit reused."""
     from gsim import gcloud
 
-    submission = upload_inputs(directory, job_type, check_cache=check_cache)
     if submission.cached:
         if verbose != "quiet":
             print(f"Cache hit: reusing job {submission.job_id}")  # noqa: T201
     else:
         gcloud.start(submission.job_id, verbose=verbose != "quiet")
-    return submission
 
 
 class CloudJobMixin:
@@ -221,13 +226,13 @@ class CloudJobMixin:
             string when ``wait=False``.
         """
         directory = self._prepare_upload_dir()
-        submission = submit(
-            directory,
-            self._cloud_job_type,
-            check_cache=check_cache,
-            verbose=verbose,
+        submission = upload_inputs(
+            directory, self._cloud_job_type, check_cache=check_cache
         )
+        # Recorded before the start, so a start that fails leaves the uploaded
+        # job reachable through start() and get_status() for a retry.
         self._record(directory, submission)
+        _start_or_announce(submission, verbose=verbose)
         if not wait:
             return submission.job_id
         return self.wait_for_results(

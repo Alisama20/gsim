@@ -91,6 +91,23 @@ def test_upload_does_not_start(cloud, tmp_path):
     cloud.start.assert_called_once_with("new-job", verbose=False)
 
 
+def test_a_failed_start_keeps_the_uploaded_job_for_a_retry(cloud, tmp_path):
+    cloud.start.side_effect = [RuntimeError("start refused"), None]
+    simulation = _Sim(tmp_path / "staging")
+    with pytest.raises(RuntimeError, match="start refused"):
+        simulation.run(wait=False)
+    assert simulation._job_id == "new-job"
+    assert simulation._config_dir == tmp_path / "staging"
+    assert (tmp_path / "staging" / "config.json").is_file()
+    assert simulation.get_status() == "running"
+    simulation.start(verbose=False)
+    assert cloud.upload.call_count == 1
+    assert [call.args for call in cloud.start.call_args_list] == [
+        ("new-job",),
+        ("new-job",),
+    ]
+
+
 @pytest.mark.parametrize("check_cache", [False, True])
 @pytest.mark.parametrize("entry", ["upload", "run"])
 def test_failed_upload_removes_the_staging_copy(cloud, tmp_path, check_cache, entry):
