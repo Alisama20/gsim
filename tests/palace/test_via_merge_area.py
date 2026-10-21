@@ -20,6 +20,8 @@ from gsim.palace.mesh import geometry
 from gsim.palace.mesh.geometry import (
     VIA_MERGE_AREA_WARN_RATIO,
     _merge_via_polygons,
+    _smallest_via_gap,
+    _via_shapes,
     _warn_if_via_merge_inflates_area,
 )
 from tests._electrode_layouts import make_sim
@@ -256,3 +258,28 @@ def test_meshing_without_merging_does_not_warn(tmp_path, caplog) -> None:
     with caplog.at_level(logging.WARNING, logger=LOGGER):
         _mesh(tmp_path, 0)
     assert [r for r in _warnings(caplog) if "Via layer" in r.getMessage()] == []
+
+
+def test_degenerate_polygons_are_skipped() -> None:
+    line = ([0.0, 1.0], [0.0, 0.0], [])
+    assert _via_shapes([line, _cut(0.0, 0.0)])[0].area == pytest.approx(SIDE**2)
+    assert len(_via_shapes([line])) == 0
+
+
+def test_self_intersecting_polygons_are_repaired() -> None:
+    bowtie = ([0.0, 1.0, 1.0, 0.0], [0.0, 1.0, 0.0, 1.0], [])
+    (shape,) = _via_shapes([bowtie])
+    assert shape.is_valid
+    assert shape.area == pytest.approx(0.5)
+
+
+def test_a_single_via_has_no_gap() -> None:
+    assert _smallest_via_gap(_via_shapes([_cut(0.0, 0.0)])) == 0.0
+
+
+def test_vias_with_no_drawn_area_do_not_warn(caplog) -> None:
+    flat = ([0.0, 1.0, 2.0], [0.0, 0.0, 0.0], [])
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        ratio = _warn_if_via_merge_inflates_area("via1", [flat, flat], [flat], 2.0)
+    assert ratio is None
+    assert _warnings(caplog) == []
