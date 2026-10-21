@@ -362,6 +362,13 @@ Presets select mesh-size targets near conductors and in the bulk. Explicit
 `auto_size=True` only scales a preset when `refined_mesh_size` is omitted;
 an explicit size is always preserved, even with `auto_size=True`.
 
+Feature detection merges touching polygons on each conductor layer before
+checking trace/neck widths and gaps, including notches and holes. Distances
+below two layout database units are ignored as grid artifacts. Gap searches
+for sizing stop at the smallest width already found (and at 500 um); larger
+gaps cannot change the size. Cross-layer spacing and arbitrary tapered or
+curved widths are not measured.
+
 Resolution warnings compare the **effective** size with the detected conductor
 feature divided by `cells_per_feature` (2 by default). They suggest a smaller
 explicit size when an override is present. This feature-based rule is a heuristic;
@@ -411,6 +418,20 @@ as infinite and stored as `max=None` with a nonzero `singular_elements` count.
 
 - [`MeshConfig`][gsim.palace.MeshConfig]
 - [`generate_mesh`][gsim.palace.generate_mesh]
+
+### Feature-based sizing
+
+Automatic sizing uses a same-layer geometry heuristic. Touching and overlapping
+conductor polygons are merged before measuring widths and spacing. Nearly
+parallel opposing edges reveal narrow traces and necks; spacing checks also
+include notches and holes within one connected conductor. Polygon bounding boxes
+provide a fallback for shapes without suitable opposing edges.
+
+Zero distances and distances below two layout database units are ignored. Gap
+searches are limited to 500 um; cross-layer gaps and arbitrary tapered or curved
+widths are not measured. These limitations make the estimate useful for choosing
+an initial mesh, rather than establishing simulation accuracy. Compare results
+across refinements before relying on resonance frequencies, Q, or S-parameters.
 
 ## Nets
 
