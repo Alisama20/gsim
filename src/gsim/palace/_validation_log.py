@@ -45,7 +45,7 @@ def solver_checks(
         [],
         [],
     )
-    estimating = postprocessing = offline = correction = False
+    estimating = estimating_until_amr = offline = correction = False
     skip_indices: set[int] = set()
     for index, line in enumerate(lines):
         if index in skip_indices:
@@ -55,13 +55,14 @@ def solver_checks(
         if "online phase" in line.lower():
             offline = False
         # Eigenmode and boundary-mode postprocessing interleaves estimator solves
-        # with PETSc object views, so only an AMR marker ends that section.
+        # with PETSc object views, so only an AMR marker ends that section. A
+        # field correction inside it is core for the rest of the section.
         if "Computing solution error estimates" in line:
-            estimating = postprocessing = True
+            estimating = estimating_until_amr = True
             correction = False
-        elif postprocessing:
+        elif estimating_until_amr:
             if _AMR_MARKER.search(line):
-                estimating = postprocessing = False
+                estimating = estimating_until_amr = False
             elif _FIELD_CORRECTION.search(line):
                 estimating, correction = False, True
         elif "Updating solution error estimates" in line:
