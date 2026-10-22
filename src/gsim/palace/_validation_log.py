@@ -23,6 +23,7 @@ _AMR_MARKER = re.compile(
     r"|Proceeding with solve/estimate iteration"
     r"|Completed \d+ iterations? of adaptive mesh refinement"
 )
+_FIELD_CORRECTION = re.compile(r"field.*correction|correcting.*field", re.IGNORECASE)
 _UNIT_RESIDUAL = re.compile(
     rf"^Linear solver did not converge, norm\(Ax-b\)/norm\(b\) = ({_NUMBER})(?: |$)"
 )
@@ -61,9 +62,11 @@ def solver_checks(
         elif postprocessing:
             if _AMR_MARKER.search(line):
                 estimating = postprocessing = False
+            elif _FIELD_CORRECTION.search(line):
+                estimating, correction = False, True
         elif "Updating solution error estimates" in line:
             estimating, correction = True, False
-        elif re.search(r"field.*correction|correcting.*field", line, re.IGNORECASE):
+        elif _FIELD_CORRECTION.search(line):
             estimating, correction = False, True
         elif re.search(
             r"\b(?:GMRES|FGMRES|eigensolve|eigenvalue)\b", line, re.IGNORECASE

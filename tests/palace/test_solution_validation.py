@@ -124,6 +124,21 @@ def test_amr_marker_ends_postprocessing_estimator_section():
     assert report.core.status == "failed"
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "Correcting magnetic field\nPCG solver did NOT converge in 10 iterations",
+        "Field correction\n" + ZERO_PAIR,
+    ],
+)
+def test_field_correction_in_postprocessing_is_a_core_failure(failure):
+    # Synthetic: a labelled field correction inside the estimator section.
+    log = f"{POSTPROCESSING}\n" + ZERO_PAIR + failure
+    report = validate_solution(log, estimator_disabled=True)
+    assert report.core.status == "failed"
+    assert report.estimator.status == "skipped"
+
+
 def test_nonunit_pair_in_postprocessing_is_an_estimator_failure():
     report = validate_solution(
         f"{POSTPROCESSING}\n" + ZERO_PAIR.replace("1.000e+00", "2.000e+00"),
