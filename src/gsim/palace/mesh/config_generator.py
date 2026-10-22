@@ -551,6 +551,7 @@ def generate_palace_config(
 
     # Build boundaries section
     conductors: list[dict[str, object]] = []
+    conductor_attrs: list[int] = []
 
     for name, info in groups["conductor_surfaces"].items():
         # Extract layer name from "layer_xy" / "layer_z" (3D) or use
@@ -566,6 +567,7 @@ def generate_palace_config(
                     "Thickness": layer.zmax - layer.zmin,
                 }
             )
+            conductor_attrs.append(info["phys_group"])
 
     # Handle PEC surfaces (planar conductors + PEC blocks)
     pec_attrs: list[int] = [
@@ -663,10 +665,18 @@ def generate_palace_config(
 
     elif simulation_type == "boundarymode":
         boundaries = {}
-        if conductors:
+        # conductor_boundary="pec": the finite-conductivity conductor surfaces
+        # are perfect conductors, as in the 3D wave-port eigenproblem
+        # (WavePortPEC). Exactly those attributes move from Conductivity to
+        # PEC; nothing else in the configuration changes.
+        conductors_as_pec = (hints or {}).get("_conductor_boundary") == "pec"
+        if conductors and not conductors_as_pec:
             boundaries["Conductivity"] = conductors
-        if pec_attrs:
-            boundaries["PEC"] = {"Attributes": sorted(set(pec_attrs))}
+        boundary_pec = set(pec_attrs)
+        if conductors_as_pec:
+            boundary_pec.update(conductor_attrs)
+        if boundary_pec:
+            boundaries["PEC"] = {"Attributes": sorted(boundary_pec)}
         # Postprocessing-only voltage/impedance paths (mode-V.csv / mode-Z.csv).
         # These do not load the 2D eigenproblem.
         mode_postprocessing = (hints or {}).get("_mode_postprocessing")
