@@ -50,8 +50,9 @@ closely, so gsim writes `EstimatorTol` `1e-2`. With AMR on, the indicator decide
 where to refine and when to stop, so gsim writes no estimator key and Palace's
 defaults apply. Explicit values win key by key; assign `None` to return to
 automatic. To restore Palace's own estimator with AMR off, set
-`estimator_tolerance=1e-6`. The error estimator never affects the S-parameters
-or other results.
+`estimator_tolerance=1e-6`. With AMR off, the error estimator never affects the
+S-parameters or other results. With AMR on, the indicator decides the refined
+mesh, and so the results computed on it.
 AMR-off runs compute the indicator to this loose tolerance, so the
 `error_indicators` of a result can read slightly higher than with Palace's default.
 
