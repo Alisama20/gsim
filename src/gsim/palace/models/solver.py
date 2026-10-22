@@ -44,6 +44,12 @@ class LinearSolverConfig(BaseModel):
     ``tolerance`` is the relative residual tolerance of each linear solve.
     Eigenvalue convergence is configured separately under ``solver.eigenmode``.
     Direct backends are more robust but can use more memory than iterative solves.
+
+    The ``estimator_*`` fields control the error estimator, Palace's AMR
+    indicator, not the adaptive frequency sweep tolerance. None, the default,
+    lets gsim choose by AMR state: a cheap setting when AMR is off and Palace's
+    default when it is on. Assign None to return to automatic. Settings passed
+    through the deprecated ``NumericalConfig`` always use automatic.
     """
 
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
@@ -73,6 +79,22 @@ class LinearSolverConfig(BaseModel):
         default=True,
         description="Use a complex coarse solve for complex-valued problems.",
     )
+    estimator_tolerance: float | None = Field(
+        default=None,
+        gt=0,
+        description="Error estimator relative tolerance; None chooses by AMR state.",
+    )
+    estimator_max_iterations: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Error estimator iterations; 0 skips its solve. None chooses by AMR state."
+        ),
+    )
+    estimator_mg: bool | None = Field(
+        default=None,
+        description="Use multigrid for the error estimator; None chooses by AMR state.",
+    )
 
     def to_palace_config(self) -> dict[str, Any]:
         """Convert to Palace's ``Solver.Linear`` block."""
@@ -87,7 +109,26 @@ class LinearSolverConfig(BaseModel):
         }
         if self.solver_type == "Default" and self.preconditioner != "Default":
             config["Type"] = self.preconditioner
+        # Palace's read order; unset keys are resolved when the config is written.
+        estimator = {
+            "EstimatorTol": self.estimator_tolerance,
+            "EstimatorMaxIts": self.estimator_max_iterations,
+            "EstimatorMG": self.estimator_mg,
+        }
+        config.update({k: v for k, v in estimator.items() if v is not None})
         return config
+
+
+# Settings once accepted flat on NumericalConfig; newer linear fields are not.
+_LEGACY_FLAT_LINEAR_FIELDS = (
+    "tolerance",
+    "max_iterations",
+    "solver_type",
+    "preconditioner",
+    "mg_max_levels",
+    "pc_mat_real",
+    "complex_coarse_solve",
+)
 
 
 class SolverConfig(BaseModel):
@@ -120,7 +161,7 @@ class SolverConfig(BaseModel):
         values = values.copy()
         flat = {
             name: values.pop(name)
-            for name in LinearSolverConfig.model_fields
+            for name in _LEGACY_FLAT_LINEAR_FIELDS
             if name in values
         }
         if flat:
