@@ -17,6 +17,12 @@ _SUCCESS = re.compile(
     r"(?:solver|eigensolve|Quasi-Newton) converged(?: in | \()", re.IGNORECASE
 )
 _ZERO_PCG = re.compile(r"^PCG solver did NOT converge in 0 iterations$")
+# AMR loop markers printed by Palace basesolver.cpp.
+_AMR_MARKER = re.compile(
+    r"Adaptive mesh refinement \(AMR\) iteration"
+    r"|Proceeding with solve/estimate iteration"
+    r"|Completed \d+ iterations? of adaptive mesh refinement"
+)
 _UNIT_RESIDUAL = re.compile(
     rf"^Linear solver did not converge, norm\(Ax-b\)/norm\(b\) = ({_NUMBER})(?: |$)"
 )
@@ -38,7 +44,7 @@ def solver_checks(
         [],
         [],
     )
-    estimating = offline = correction = False
+    estimating = postprocessing = offline = correction = False
     skip_indices: set[int] = set()
     for index, line in enumerate(lines):
         if index in skip_indices:
@@ -47,7 +53,15 @@ def solver_checks(
             offline = True
         if "online phase" in line.lower():
             offline = False
-        if "Updating solution error estimates" in line:
+        # Eigenmode and boundary-mode postprocessing interleaves estimator solves
+        # with PETSc object views, so only an AMR marker ends that section.
+        if "Computing solution error estimates" in line:
+            estimating = postprocessing = True
+            correction = False
+        elif postprocessing:
+            if _AMR_MARKER.search(line):
+                estimating = postprocessing = False
+        elif "Updating solution error estimates" in line:
             estimating, correction = True, False
         elif re.search(r"field.*correction|correcting.*field", line, re.IGNORECASE):
             estimating, correction = False, True
