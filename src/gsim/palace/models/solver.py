@@ -86,18 +86,28 @@ class LinearSolverConfig(BaseModel):
     estimator_tolerance: float | None = Field(
         default=None,
         gt=0,
-        description="Error estimator relative tolerance; None chooses by AMR state.",
+        description=(
+            "Relative tolerance of the error estimator (the AMR indicator), not "
+            "the adaptive sweep tolerance. None chooses by AMR state; assign "
+            "None to return to automatic."
+        ),
     )
     estimator_max_iterations: int | None = Field(
         default=None,
         ge=0,
         description=(
-            "Error estimator iterations; 0 skips its solve. None chooses by AMR state."
+            "Error estimator (AMR indicator) iterations, not an adaptive sweep "
+            "setting; 0 skips its solve. None chooses by AMR state; assign None "
+            "to return to automatic."
         ),
     )
     estimator_mg: bool | None = Field(
         default=None,
-        description="Use multigrid for the error estimator; None chooses by AMR state.",
+        description=(
+            "Use multigrid for the error estimator (the AMR indicator), not the "
+            "adaptive sweep. None chooses by AMR state; assign None to return "
+            "to automatic."
+        ),
     )
 
     def to_palace_config(self) -> dict[str, Any]:
