@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from itertools import pairwise
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -321,6 +322,17 @@ class WavePortConfig(BaseModel):
             its own default (max(2 x Mode, Mode + 15)).
         eigensolver_verbose: Palace Verbose level for this port's mode
             solve. None uses Palace's own default.
+        modes: Palace mode numbers followed on this port's face, for a
+            multimode wave port. Empty (the default) is an ordinary wave
+            port that follows ``mode`` only.
+        active_mode: With ``modes``, the mode whose entry terminates the
+            face; it must be in ``modes`` and equal to ``mode``. The other
+            modes are observation-only entries (``"Active": false``).
+        excite_modes: ``"active"`` excites only the active entry, ``"all"``
+            every entry of the port.
+        pilot_paths: Optional ``{mode: points}``: an open polyline of
+            ``(x, y, z)`` points in um from the signal to the reference
+            conductor, written as that entry's ``VoltagePath``.
     """
 
     model_config = ConfigDict(validate_assignment=True)
@@ -363,6 +375,81 @@ class WavePortConfig(BaseModel):
         ge=0,
         description="Palace Verbose level for this port's mode solve",
     )
+    modes: tuple[int, ...] = Field(
+        default=(),
+        description=(
+            "Palace mode numbers followed on this port's face (multimode port)"
+        ),
+    )
+    active_mode: int | None = Field(
+        default=None,
+        ge=1,
+        description="Mode whose entry terminates the face (multimode port)",
+    )
+    excite_modes: Literal["active", "all"] = Field(
+        default="active",
+        description="Excite only the active entry or every entry of the port",
+    )
+    pilot_paths: dict[int, list[list[float]]] | None = Field(
+        default=None,
+        description=(
+            "Per-mode VoltagePath: (x, y, z) points in um from the signal to "
+            "the reference conductor"
+        ),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _active_mode_sets_mode(cls, data: Any) -> Any:
+        """Let ``active_mode`` stand in for ``mode`` when only it is given."""
+        if (
+            isinstance(data, dict)
+            and data.get("active_mode") is not None
+            and "mode" not in data
+        ):
+            return {**data, "mode": data["active_mode"]}
+        return data
+
+    @model_validator(mode="after")
+    def _validate_modes(self) -> Self:
+        """Check the mode list, the active mode and the pilot paths."""
+        if self.modes:
+            if len(set(self.modes)) != len(self.modes):
+                raise ValueError(f"modes lists a mode twice: {list(self.modes)}")
+            if min(self.modes) < 1:
+                raise ValueError("modes are 1-based Palace mode numbers")
+            if self.active_mode is None:
+                raise ValueError("active_mode is required with modes")
+            if self.active_mode not in self.modes:
+                raise ValueError(
+                    f"active_mode {self.active_mode} is not in modes {list(self.modes)}"
+                )
+        if self.active_mode is not None and self.mode != self.active_mode:
+            raise ValueError(
+                f"mode ({self.mode}) and active_mode ({self.active_mode}) "
+                "must agree: the active entry follows the active mode"
+            )
+        known = self.modes or (self.mode,)
+        for mode, path in (self.pilot_paths or {}).items():
+            if mode not in known:
+                raise ValueError(
+                    f"pilot_paths has mode {mode}, which is not one of {list(known)}"
+                )
+            if len(path) < 2:
+                raise ValueError(f"pilot path of mode {mode} needs 2+ points")
+            for point in path:
+                if len(point) != 3 or not all(math.isfinite(c) for c in point):
+                    raise ValueError(
+                        f"pilot path of mode {mode}: points are finite "
+                        f"(x, y, z) in um, got {point}"
+                    )
+            for first, second in pairwise(path):
+                if first == second:
+                    raise ValueError(
+                        f"pilot path of mode {mode} repeats the point {first}; "
+                        "Palace aborts on a zero-length segment"
+                    )
+        return self
 
 
 class TwoTerminalPortConfig(BaseModel):

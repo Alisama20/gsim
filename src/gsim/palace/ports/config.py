@@ -7,11 +7,13 @@ This module provides helpers to configure gdsfactory ports with Palace metadata.
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from gsim.common.stack import LayerStack
 
 
@@ -87,6 +89,13 @@ class PalacePort:
     eigensolver_ksp_tol: float | None = None
     eigensolver_max_size: int | None = None
     eigensolver_verbose: int | None = None
+
+    # Multimode waveport: the Palace modes followed on this face (empty for
+    # an ordinary waveport), which one terminates the face (``mode``), which
+    # entries are excited, and the per-mode VoltagePath in um.
+    modes: tuple[int, ...] = ()
+    excite_modes: Literal["active", "all"] = "active"
+    pilot_paths: dict[int, list[list[float]]] = field(default_factory=dict)
 
     @property
     def direction(self) -> str:
@@ -392,6 +401,9 @@ def configure_wave_port(
     eigensolver_ksp_tol: float | None = None,
     eigensolver_max_size: int | None = None,
     eigensolver_verbose: int | None = None,
+    modes: Sequence[int] = (),
+    excite_modes: Literal["active", "all"] = "active",
+    pilot_paths: Mapping[int, Sequence[Sequence[float]]] | None = None,
 ):
     """Configure gdsfactory port(s) as wave ports for Palace simulation.
 
@@ -420,6 +432,12 @@ def configure_wave_port(
             its own default.
         eigensolver_verbose: Palace Verbose level for this port's mode
             solve. None uses Palace's own default.
+        modes: Palace modes followed on the port's face (multimode wave
+            port); empty for an ordinary wave port. ``mode`` is the active
+            one and must be in the list.
+        excite_modes: ``"active"`` or ``"all"`` entries excited.
+        pilot_paths: Optional ``{mode: points}`` of ``(x, y, z)`` um
+            points, each a Palace ``VoltagePath``.
 
     Examples:
         ```python
@@ -448,6 +466,12 @@ def configure_wave_port(
         port.info["eigensolver_ksp_tol"] = eigensolver_ksp_tol
         port.info["eigensolver_max_size"] = eigensolver_max_size
         port.info["eigensolver_verbose"] = eigensolver_verbose
+        port.info["modes"] = [int(m) for m in modes]
+        port.info["excite_modes"] = excite_modes
+        port.info["pilot_paths"] = [
+            {"mode": int(m), "path": [[float(c) for c in pt] for pt in path]}
+            for m, path in (pilot_paths or {}).items()
+        ]
 
 
 def extract_ports(component, stack: LayerStack) -> list[PalacePort]:
@@ -679,6 +703,12 @@ def extract_ports(component, stack: LayerStack) -> list[PalacePort]:
             eigensolver_ksp_tol=info.get("eigensolver_ksp_tol"),
             eigensolver_max_size=info.get("eigensolver_max_size"),
             eigensolver_verbose=info.get("eigensolver_verbose"),
+            modes=tuple(int(m) for m in info.get("modes") or ()),
+            excite_modes=info.get("excite_modes", "active"),
+            pilot_paths={
+                int(item["mode"]): [[float(c) for c in pt] for pt in item["path"]]
+                for item in info.get("pilot_paths") or ()
+            },
         )
         palace_ports.append(palace_port)
 
