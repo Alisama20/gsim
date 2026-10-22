@@ -1223,6 +1223,7 @@ def generate_mesh(
     planar_conductors: bool = False,
     pec_blocks: list[PECBlockConfig] | None = None,
     absorbing_boundary: bool = True,
+    absorbing_order: int = 2,
     periodic_axis: str | None = None,
     symmetry_plane: SymmetryPlaneConfig | None = None,
     merge_via_distance: float = 2.0,
@@ -1280,6 +1281,7 @@ def generate_mesh(
         pec_blocks: PEC configuration
         planar_conductors: If True, treat conductors as 2D PEC surfaces
         absorbing_boundary: If True, use absorbing boundary conditions on outer surfaces
+        absorbing_order: Order (1 or 2) of the absorbing boundary condition
         periodic_axis: ("x" or "y") for meshing constraints on opposite domain sides
         symmetry_plane: Optional PEC/PMC symmetry plane; only the kept half of
             the domain is meshed. Not supported with ``boundarymode`` or with
@@ -1543,6 +1545,7 @@ def generate_mesh(
                     boundary_mode_config,
                     absorbing_boundary,
                     periodic_axis,
+                    absorbing_order=absorbing_order,
                     # tensors are written in the 2D mesh frame (_to_section_frame)
                     hints={"_cross_section_axis": cross_section.axis},
                 )
@@ -1844,6 +1847,7 @@ def generate_mesh(
                 absorbing_boundary,
                 periodic_axis,
                 periodic_translation=periodic_translation,
+                absorbing_order=absorbing_order,
             )
 
     finally:
