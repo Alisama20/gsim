@@ -77,6 +77,7 @@ def check_via_merging(
     stack: LayerStack,
     nets: Nets,
     merge_via_distance: float,
+    clip_merged_vias: bool = False,
 ) -> None:
     """Fail when merging nearby vias would join the vias of two nets.
 
@@ -89,14 +90,22 @@ def check_via_merging(
         stack: The layer stack.
         nets: The nets of that geometry.
         merge_via_distance: The merge distance of the mesh, in um.
+        clip_merged_vias: Whether the mesh clips merged vias to the metal
+            above and below them. The check then looks at the clipped vias, as
+            ``add_metals`` meshes them.
 
     Raises:
         ValueError: If a merged via polygon covers vias of more than one net.
     """
-    from gsim.palace.mesh.geometry import _merge_via_polygons
+    from gsim.palace.mesh.geometry import (
+        _merge_via_layer,
+        _polygons_by_gds_layer,
+        _via_landing_area,
+    )
 
     if merge_via_distance <= 0:
         return
+    polygons_by_gds = _polygons_by_gds_layer(geometry.polygons)
     for name, layer in stack.layers.items():
         if layer.layer_type != "via":
             continue
@@ -117,9 +126,16 @@ def check_via_merging(
             i: _polygon(xs, ys, holes)
             for i, (xs, ys, holes) in zip(indices, polys, strict=True)
         }
-        merged = _merge_via_polygons(
+        landing = (
+            _via_landing_area(polygons_by_gds, stack, name)
+            if clip_merged_vias
+            else None
+        )
+        merged = _merge_via_layer(
             [(list(xs), list(ys), holes) for xs, ys, holes in polys],
             merge_via_distance,
+            landing,
+            label=repr(name),
         )
         for xs, ys, holes in merged:
             outline = _polygon(xs, ys, holes)

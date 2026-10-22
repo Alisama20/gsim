@@ -286,6 +286,11 @@ cap.pairs()  # every pair and every terminal-to-ground value, as a table
   Merging also fills the gaps between vias, so their area grows; a warning names
   the layer and the area ratio when it grows by more than 5%. Pass
   `merge_via_distance=0` to keep every via as drawn.
+  `mesh(clip_merged_vias=True)` keeps the merged volume inside the overlap of the metal
+  directly above and below the via layer, and never drops a drawn cut. With no metal
+  on one side (for example contacts on the substrate) the cuts stay as drawn. A slab
+  that lies entirely between two continuous metals is unchanged by clipping, so
+  `merge_via_distance=0` is still the way to mesh every cut there.
 - **Changing the selection style.** A mesh made for layer terminals cannot serve net
   terminals and the other way round; `write_config()` raises and asks you to call
   `mesh()` again. In net mode `write_config()` also writes `terminals.json`, which
