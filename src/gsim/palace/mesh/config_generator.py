@@ -186,6 +186,36 @@ def _electrostatic_net_boundaries(
     return boundaries
 
 
+def check_model_name(model_name: str) -> str:
+    """Return ``model_name`` if it is a plain name for files in the sim directory.
+
+    It names ``<model_name>.msh`` and ``output/<model_name>``, the directory a
+    local run clears before Palace writes to it. So it must not be empty, ``.``,
+    ``..``, or contain a path separator, any of which would point that directory
+    at the simulation directory itself or outside it.
+
+    Raises:
+        ValueError: If ``model_name`` is not a plain name.
+    """
+    if model_name in {"", ".", ".."} or any(
+        sep in model_name for sep in ("/", "\\", ":")
+    ):
+        raise ValueError(
+            f"model_name must be a plain file name, not {model_name!r}: no path "
+            "separators, and not empty, '.' or '..'."
+        )
+    return model_name
+
+
+def output_subdir(model_name: str) -> Path:
+    """Where Palace writes its tables, relative to the simulation directory.
+
+    Raises:
+        ValueError: If ``model_name`` is not a plain name.
+    """
+    return Path("output") / check_model_name(model_name)
+
+
 #: Physical axis (0=x, 1=y, 2=z) behind each of the mesh's x, y and z, for a
 #: cross-section whose plane normal is the key. The native 2D mesh puts the
 #: in-plane coordinate on mesh x, the vertical one on mesh y and the
@@ -390,7 +420,7 @@ def generate_palace_config(
         "Problem": {
             "Type": problem_type_map[simulation_type],
             "Verbose": 3,
-            "Output": f"output/{model_name}",
+            "Output": output_subdir(model_name).as_posix(),
         },
         "Model": {
             "Mesh": f"{model_name}.msh",
@@ -1162,5 +1192,6 @@ def write_config(
 __all__ = [
     "collect_mesh_stats",
     "generate_palace_config",
+    "output_subdir",
     "write_config",
 ]

@@ -159,14 +159,13 @@ def _recommend_parallel(
     return max(1, recommended), num_threads
 
 
-def _wrote_solver_output(output_dir: Path) -> bool:
-    """Whether a local run left any solver output under its output dir.
+def _wrote_solver_output(postpro_dir: Path) -> bool:
+    """Whether a local run left any solver output in Palace's output dir.
 
     What separates a dead Palace runtime from a dead solve: a runtime
     that cannot start kills the binary before the solver writes
     anything.
     """
-    postpro_dir = output_dir / "output/palace/"
     if not postpro_dir.is_dir():
         return False
     return any(
@@ -383,6 +382,23 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
     def has_mesh(self) -> bool:
         """Whether ``mesh()`` has run and left a mesh to read."""
         return self._last_mesh_result is not None
+
+    def _model_name(self) -> str:
+        """The base name mesh() gave the mesh file and Palace's output dir."""
+        result = self._last_mesh_result
+        return result.model_name if result is not None else "palace"
+
+    def _postpro_dir(self) -> Path:
+        """Where a local run's Palace tables land.
+
+        Raises:
+            ValueError: When no output directory is set.
+        """
+        from gsim.palace.mesh.config_generator import output_subdir
+
+        if self._output_dir is None:
+            raise ValueError("Output directory not set. Call set_output_dir() first.")
+        return Path(self._output_dir) / output_subdir(self._model_name())
 
     def _run_context(self) -> str:
         """What was being run, named in the first line of an abort report."""
@@ -1232,7 +1248,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
         if self._output_dir is None:
             raise ValueError("Output directory not set. Call set_output_dir() first.")
 
-        mesh_path = self._output_dir / "palace.msh"
+        mesh_path = self._output_dir / f"{self._model_name()}.msh"
         if not mesh_path.exists():
             raise ValueError(f"Mesh file not found: {mesh_path}. Call mesh() first.")
 
@@ -1982,7 +1998,8 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
             fmax: Max frequency for mesh sizing (Hz), overrides preset
             planar_conductors: Treat conductors as 2D PEC surfaces
             show_gui: Show gmsh GUI during meshing
-            model_name: Base name for output files
+            model_name: Base name for output files: ``<model_name>.msh`` and
+                ``output/<model_name>``. A plain name, without path separators
             verbose: Print progress messages
             verbosity: Gmsh OCC verbosity level (0=silent, 1-99=increasing)
             auto_size: If True, scale refined_mesh_size down to the smallest
@@ -2025,17 +2042,20 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
             SimulationResult with mesh path
 
         Raises:
-            ValueError: If output_dir not set or configuration is invalid
+            ValueError: If output_dir not set, configuration is invalid, or
+                ``model_name`` is not a plain file name
 
         Example:
             >>> sim.set_output_dir("./sim")
             >>> result = sim.mesh(preset="fine", planar_conductors=True)
             >>> print(f"Mesh saved to: {result.mesh_path}")
         """
+        from gsim.palace.mesh.config_generator import check_model_name
         from gsim.palace.ports import extract_ports
 
         if self._output_dir is None:
             raise ValueError("Output directory not set. Call set_output_dir() first.")
+        check_model_name(model_name)
 
         component = self.geometry.component if self.geometry else None
 
@@ -2359,19 +2379,17 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
             >>> # For DrivenSim: `results` is SParams -> results.s21.db
             >>> # For eigen / electrostatic: `results` is dict[str, Path]
         """
-        import os
-        import shutil
         import subprocess
 
-        # Will hold the bundled library directory when using palace-toolkit-cpu
-        _bundled_lib_dir: Path | None = None
+        from gsim.palace.runtime import local_abort_report, resolve_launch, run_palace
 
         if self._output_dir is None:
             raise ValueError("Output directory not set. Call set_output_dir() first.")
 
         output_dir = Path(self._output_dir)
         config_path = output_dir / "config.json"
-        mesh_path = output_dir / "palace.msh"
+        mesh_path = output_dir / f"{self._model_name()}.msh"
+        postpro_dir = self._postpro_dir()
 
         # Choose safe parallel defaults. SuperLU_DIST's 2D processor grid does
         # not scale on small problems (2D mode analysis at 8-16 ranks hangs),
@@ -2427,310 +2445,36 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
                 f"Mesh file not found: {mesh_path}. Call mesh() first."
             )
 
-        # Auto-discovery when arguments are omitted.
-        search_roots = [Path.cwd(), output_dir, output_dir.parent]
-        dedup_roots: list[Path] = []
-        for root in search_roots:
-            resolved = root.expanduser().resolve()
-            if resolved not in dedup_roots:
-                dedup_roots.append(resolved)
+        launch = resolve_launch(
+            executable=palace_executable,
+            sif=palace_sif_path,
+            use_apptainer=use_apptainer,
+            search_roots=[Path.cwd(), output_dir, output_dir.parent],
+            verbose=verbose,
+        )
 
-        if palace_sif_path is None:
-            palace_sif_path = os.environ.get("PALACE_SIF")
-            if palace_sif_path is None:
-                sif_rel_candidates = [
-                    Path("Palace.sif"),
-                    Path("palace.sif"),
-                    Path("bin/Palace.sif"),
-                    Path("bin/palace.sif"),
-                ]
-                for root in dedup_roots:
-                    for rel in sif_rel_candidates:
-                        candidate = (root / rel).resolve()
-                        if candidate.exists():
-                            palace_sif_path = str(candidate)
-                            if verbose:
-                                logger.info(
-                                    "Auto-discovered Palace SIF: %s", palace_sif_path
-                                )
-                            break
-                    if palace_sif_path is not None:
-                        break
-
-        if palace_executable is None:
-            palace_executable = os.environ.get("PALACE_EXECUTABLE")
-
-        # Prefer a local Palace executable when available, even when a SIF is
-        # configured via PALACE_SIF. This keeps local developer workflows on
-        # native binaries by default.
-        if palace_executable is None:
-            for root in dedup_roots:
-                candidate = (root / "bin" / "palace").resolve()
-                if candidate.exists() and os.access(candidate, os.X_OK):
-                    palace_executable = str(candidate)
-                    if verbose:
-                        logger.info(
-                            "Auto-discovered Palace executable: %s", palace_executable
-                        )
-                    break
-
-        # Track whether ``palace_executable`` is only a last-resort PATH
-        # fallback (rather than a user-supplied path). The bundled/cached
-        # resolver must run first in that case.
-        _path_fallback = False
-        if palace_executable is None and palace_sif_path is None:
-            palace_executable = "palace"
-            _path_fallback = True
-
-        # palace_executable takes precedence for a simpler API.
-        run_with_apptainer = use_apptainer and palace_executable is None
-
-        if palace_executable is not None and use_apptainer and verbose:
-            logger.info(
-                "Using Palace executable (%s); ignoring use_apptainer=True.",
-                palace_executable,
-            )
-
-        # Determine Palace command based on effective execution mode.
-        if run_with_apptainer:
-            # Determine Palace SIF path from environment variable or parameter
-            if palace_sif_path is None:
-                raise ValueError(
-                    "Palace SIF path not specified. Either set PALACE_SIF, pass "
-                    "palace_sif_path, or provide a Palace executable."
-                )
-
-            sif_path = Path(palace_sif_path).expanduser().resolve()
-
-            if not sif_path.exists():
-                raise FileNotFoundError(
-                    f"Palace SIF file not found: {sif_path}. "
-                    "Install Palace via Apptainer or provide correct path."
-                )
-
-            # Check that apptainer is available
-            if shutil.which("apptainer") is None:
-                raise RuntimeError(
-                    "Apptainer not found. Install Apptainer to run local simulations "
-                    "with use_apptainer=True."
-                )
-
-            # Build Apptainer command
-            cmd = [
-                "apptainer",
-                "run",
-                str(sif_path),
-                "-np",
-                str(num_processes),
-            ]
-
-        else:
-            # Direct Palace execution
-            resolved_exe: str | Path | None = None
-            lib_dir: Path | None = None
-
-            if palace_executable is not None and not _path_fallback:
-                # Explicit parameter — resolve to absolute path
-                resolved_exe = Path(palace_executable).expanduser().resolve()
-            else:
-                # Check PALACE_EXECUTABLE env var
-                env_exe = os.environ.get("PALACE_EXECUTABLE", "").strip()
-                if env_exe:
-                    resolved_exe = env_exe
-                    lib_dir = None
-                else:
-                    # Try bundled resolver (palace-toolkit-cpu, PALACE_BIN, PATH)
-                    from gsim.palace.runtime import (
-                        resolve_palace_binary,
-                        resolve_palace_library_dir,
-                    )
-
-                    bundled = resolve_palace_binary()
-                    if bundled is not None:
-                        resolved_exe = bundled
-                        lib_dir = resolve_palace_library_dir()
-                        if verbose:
-                            from gsim.palace.runtime import (
-                                _cached_binary as _cached,
-                            )
-                            from gsim.palace.runtime import (
-                                _palace_cpu_available as _cpu_avail,
-                            )
-                            from gsim.palace.runtime import (
-                                _palace_toolkit_available as _toolkit_avail,
-                            )
-
-                            source = (
-                                "palace-toolkit-cpu"
-                                if _cpu_avail()
-                                else "gsim cached runtime"
-                                if _cached() is not None
-                                else "palace-toolkit"
-                                if _toolkit_avail()
-                                else "PALACE_BIN / PATH"
-                            )
-                            logger.info(
-                                "Palace binary: %s  (source: %s)",
-                                bundled,
-                                source,
-                            )
-                            try:
-                                import subprocess as _sp
-
-                                ver = _sp.run(  # noqa: S603
-                                    [str(bundled), "--version"],
-                                    capture_output=True,
-                                    text=True,
-                                    timeout=10,
-                                    check=False,
-                                )
-                                if ver.returncode == 0:
-                                    logger.info(ver.stdout.strip())
-                            except Exception:
-                                pass
-                    else:
-                        # Last resort: "palace" in PATH
-                        resolved_exe = "palace"
-
-            if resolved_exe is None:
-                raise FileNotFoundError(
-                    "Palace executable not found. Set PALACE_BIN or "
-                    "PALACE_EXECUTABLE, install a Palace binary, or let gsim "
-                    "auto-download the prebuilt CPU runtime (Linux x86_64)."
-                )
-
-            exe_path = Path(resolved_exe)
-
-            # Check if executable exists (resolve PATH if needed)
-            if not exe_path.exists():
-                resolved = shutil.which(str(exe_path))
-                if resolved is None:
-                    raise FileNotFoundError(
-                        f"Palace executable not found: {exe_path}. "
-                        "Install Palace directly or provide correct path via "
-                        "palace_executable, or let gsim auto-download the "
-                        "prebuilt CPU runtime (Linux x86_64)."
-                    )
-                exe_path = Path(resolved)
-
-            if not os.access(exe_path, os.X_OK):
-                raise FileNotFoundError(
-                    f"Palace executable is not executable: {exe_path}. "
-                    "Update file permissions or provide a valid executable path."
-                )
-
-            cmd = [
-                str(exe_path),
-                "-np",
-                str(num_processes),
-            ]
-            # Propagate bundled lib dir out of the else scope for env setup
-            # (lib_dir is defined only inside this else branch)
-            _bundled_lib_dir = lib_dir
-
-        # Prepare environment with LD_LIBRARY_PATH for bundled Palace binary
-        _run_env = os.environ.copy()
-        if not use_apptainer and _bundled_lib_dir is not None:
-            prior = _run_env.get("LD_LIBRARY_PATH", "")
-            _run_env["LD_LIBRARY_PATH"] = (
-                f"{_bundled_lib_dir}:{prior}" if prior else str(_bundled_lib_dir)
-            )
-            logger.debug(
-                "Injected LD_LIBRARY_PATH for bundled Palace: %s",
-                _run_env["LD_LIBRARY_PATH"],
-            )
-
-        if num_threads is not None:
-            cmd.extend(["-nt", str(num_threads)])
-        cmd.extend(["config.json"])
-
-        def _emit_info(msg: str, *args: object) -> None:
+        def _emit_info(msg: str) -> None:
             if logger.isEnabledFor(logging.INFO):
-                logger.info(msg, *args)
+                logger.info("%s", msg)
             else:
-                logger.warning(msg, *args)
+                logger.warning("%s", msg)
 
-        def _emit_warning(msg: str, *args: object) -> None:
-            logger.warning(msg, *args)
-
-        if verbose:
-            if run_with_apptainer:
-                _emit_info("Running Palace simulation in %s via Apptainer", output_dir)
-            else:
-                _emit_info("Running Palace simulation in %s directly", output_dir)
-            _emit_info("Command: %s", " ".join(cmd))
-            _emit_info("Processes: %d", num_processes)
-
-        # Run simulation. Both paths report a failure the same way, so
-        # the one that streams records it rather than raising inside the
-        # block whose handler would catch it.
-        failure: subprocess.CalledProcessError | None = None
         try:
-            if verbose:
-                streamed_lines: list[str] = []
-                with subprocess.Popen(  # noqa: S603
-                    cmd,
-                    cwd=output_dir,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    env=_run_env,
-                ) as process:
-                    if process.stdout is not None:
-                        for line in process.stdout:
-                            line = line.rstrip("\n")
-                            streamed_lines.append(line)
-                            if line:
-                                _emit_info(line)
-                    returncode = process.wait()
-
-                if returncode != 0:
-                    # The output was streamed as it arrived, so a report
-                    # quoting the decisive line loses nothing a user has
-                    # not already seen.
-                    failure = subprocess.CalledProcessError(
-                        returncode,
-                        cmd,
-                        output="",
-                        stderr="\n".join(streamed_lines[-200:]),
-                    )
-            else:
-                result = subprocess.run(  # noqa: S603
-                    cmd,
-                    cwd=output_dir,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    env=_run_env,
-                )
-                if result.stdout:
-                    logger.debug(result.stdout)
-                if result.stderr:
-                    _emit_warning(result.stderr)
-        except FileNotFoundError as e:
-            if run_with_apptainer:
-                raise RuntimeError(
-                    "Apptainer not found. Install Apptainer to run local simulations "
-                    "with use_apptainer=True."
-                ) from e
-            raise RuntimeError(
-                "Palace executable not found. Install Palace directly or provide "
-                "correct path via palace_executable parameter, "
-                "or set PALACE_EXECUTABLE environment variable."
-            ) from e
-        except subprocess.CalledProcessError as err:
-            failure = err
-
-        if failure is not None:
-            from gsim.palace.runtime import binary_that_ran, local_abort_report
-
+            run_palace(
+                launch,
+                cwd=output_dir,
+                num_processes=num_processes,
+                num_threads=num_threads,
+                verbose=verbose,
+                emit=_emit_info,
+            )
+        except subprocess.CalledProcessError as failure:
             raise RuntimeError(
                 local_abort_report(
                     failure,
-                    binary=binary_that_ran(failure, palace_executable),
+                    binary=launch.binary,
                     output_dir=output_dir,
-                    wrote_output=_wrote_solver_output(output_dir),
+                    wrote_output=_wrote_solver_output(postpro_dir),
                     during=self._run_context(),
                     remedy=remedy,
                 )
@@ -2738,11 +2482,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
 
         if verbose:
             _emit_info("Simulation completed successfully")
-
-        postpro_dir = output_dir / "output/palace/"
-
-        if verbose:
-            _emit_info("Results saved to %s", postpro_dir)
+            _emit_info(f"Results saved to {postpro_dir}")
 
         files = {
             file.name: file

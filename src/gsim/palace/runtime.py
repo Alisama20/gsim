@@ -43,7 +43,9 @@ import signal
 import stat
 import subprocess
 import tempfile
+from collections.abc import Callable, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import Request, urlopen
 from zipfile import ZipFile, is_zipfile
@@ -51,12 +53,17 @@ from zipfile import ZipFile, is_zipfile
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "PalaceLaunch",
+    "PalaceRuntime",
     "binary_that_ran",
     "install_palace_runtime",
     "local_abort_report",
     "require_palace_binary",
+    "resolve_launch",
     "resolve_palace_binary",
     "resolve_palace_library_dir",
+    "resolve_palace_runtime",
+    "run_palace",
 ]
 
 _DEFAULT_BINARY_TAG = "0.18.0"
@@ -256,12 +263,28 @@ def _palace_toolkit_available() -> bool:
     return importlib.util.find_spec("palacetoolkit") is not None
 
 
-def resolve_palace_binary(
+@dataclass(frozen=True)
+class PalaceRuntime:
+    """A Palace executable, where it came from, and the libraries it needs."""
+
+    binary: Path
+    source: str
+    """``PALACE_BIN``, ``PATH``, ``palace-toolkit-cpu``, ``gsim cached runtime``,
+    ``gsim downloaded runtime`` or ``palace-toolkit``."""
+    library_dir: Path | None = None
+    """The shared libraries shipped with this binary, for ``LD_LIBRARY_PATH``;
+    ``None`` for a binary the user installed, which finds its own."""
+
+
+def resolve_palace_runtime(
     *,
     prefer_bundled: bool = False,
     download_if_missing: bool = True,
-) -> Path | None:
-    """Return a path to a runnable Palace executable, or ``None``.
+) -> PalaceRuntime | None:
+    """Return a runnable Palace executable with its source, or ``None``.
+
+    The library directory comes from the same source as the binary, so a
+    user's own Palace is never handed the libraries of a bundled one.
 
     Parameters
     ----------
@@ -274,9 +297,8 @@ def resolve_palace_binary(
 
     Returns:
     -------
-    Path | None
-        Absolute path to a Palace executable, or ``None`` if no suitable
-        binary was found.
+    PalaceRuntime | None
+        The resolved runtime, or ``None`` if no suitable binary was found.
     """
     if not prefer_bundled:
         # 1. PALACE_BIN env var (highest priority)
@@ -285,7 +307,7 @@ def resolve_palace_binary(
             candidate = Path(env_bin).expanduser().resolve()
             if candidate.is_file() and _binary_is_runnable(candidate):
                 logger.info("resolve_palace_binary: using PALACE_BIN=%s", candidate)
-                return candidate
+                return PalaceRuntime(candidate, "PALACE_BIN")
             logger.warning(
                 "resolve_palace_binary: PALACE_BIN=%s is not a runnable executable",
                 candidate,
@@ -300,7 +322,7 @@ def resolve_palace_binary(
                 exe,
                 resolved,
             )
-            return Path(resolved).resolve()
+            return PalaceRuntime(Path(resolved).resolve(), "PATH")
 
     # 3. Legacy palace-toolkit-cpu packaged binary
     if _palace_cpu_available():
@@ -312,7 +334,9 @@ def resolve_palace_binary(
                 "resolve_palace_binary: using palace-toolkit-cpu bundled binary %s",
                 candidate,
             )
-            return candidate.resolve()
+            return PalaceRuntime(
+                candidate.resolve(), "palace-toolkit-cpu", _cpu_package_library_dir()
+            )
         logger.info(
             "resolve_palace_binary: palace-toolkit-cpu is installed "
             "but no bundled binary was found"
@@ -324,23 +348,31 @@ def resolve_palace_binary(
 
     # 4. gsim's own cached runtime
     cached = _cached_binary()
-    if cached is not None and _binary_is_runnable(cached, _cached_library_dir()):
+    cached_lib = _cached_library_dir()
+    if cached is not None and _binary_is_runnable(cached, cached_lib):
         logger.info(
             "resolve_palace_binary: using gsim cached runtime %s",
             cached,
         )
-        return cached.resolve()
+        return PalaceRuntime(
+            cached.resolve(), "gsim cached runtime", _resolved(cached_lib)
+        )
 
     # 5. Auto-download a prebuilt Palace CPU runtime (Linux x86_64)
     if download_if_missing and _is_linux_x86_64() and _auto_download_enabled():
         with suppress(Exception):
             downloaded = install_palace_runtime(force=False)
-            if _binary_is_runnable(downloaded, _cached_library_dir()):
+            cached_lib = _cached_library_dir()
+            if _binary_is_runnable(downloaded, cached_lib):
                 logger.info(
                     "resolve_palace_binary: using gsim downloaded runtime %s",
                     downloaded,
                 )
-                return downloaded.resolve()
+                return PalaceRuntime(
+                    downloaded.resolve(),
+                    "gsim downloaded runtime",
+                    _resolved(cached_lib),
+                )
 
     # 6. Delegation to the palace-toolkit package (if installed) as a fallback
     if _palace_toolkit_available():
@@ -362,9 +394,42 @@ def resolve_palace_binary(
                     "resolve_palace_binary: using palace-toolkit runtime %s",
                     candidate,
                 )
-                return candidate.resolve()
+                return PalaceRuntime(
+                    candidate.resolve(), "palace-toolkit", _toolkit_library_dir()
+                )
 
     return None
+
+
+def resolve_palace_binary(
+    *,
+    prefer_bundled: bool = False,
+    download_if_missing: bool = True,
+) -> Path | None:
+    """Return a path to a runnable Palace executable, or ``None``.
+
+    The binary of :func:`resolve_palace_runtime`, which also says where it
+    came from and which libraries it needs.
+
+    Parameters
+    ----------
+    prefer_bundled:
+        If ``True``, skip the ``PALACE_BIN`` / ``PALACE_EXECUTABLE`` /
+        ``PATH`` checks and go straight to gsim's cached/bundled runtime.
+    download_if_missing:
+        If ``True`` (default), auto-download and cache a prebuilt Palace CPU
+        runtime on Linux x86_64 when no binary is found elsewhere.
+
+    Returns:
+    -------
+    Path | None
+        Absolute path to a Palace executable, or ``None`` if no suitable
+        binary was found.
+    """
+    found = resolve_palace_runtime(
+        prefer_bundled=prefer_bundled, download_if_missing=download_if_missing
+    )
+    return None if found is None else found.binary
 
 
 def require_palace_binary(*, hint: str | None = None) -> Path:
@@ -403,41 +468,66 @@ def require_palace_binary(*, hint: str | None = None) -> Path:
     return binary
 
 
+def _resolved(directory: Path | None) -> Path | None:
+    """The directory, absolute, or ``None`` when absent."""
+    return directory.resolve() if directory is not None else None
+
+
+def _cpu_package_library_dir() -> Path | None:
+    """The libraries shipped with the legacy ``palace-toolkit-cpu`` wheel.
+
+    A wheel that names no library directory leaves its binary to find its
+    own, so the lookup never stops the binary from being resolved.
+    """
+    if not _palace_cpu_available():
+        return None
+    try:
+        from palacetoolkit_palace_cpu import palace_library_path
+
+        lib_dir = palace_library_path()
+    except Exception as exc:
+        logger.debug("palace-toolkit-cpu names no library directory: %s", exc)
+        return None
+    return lib_dir.resolve() if lib_dir.is_dir() else None
+
+
+def _toolkit_library_dir() -> Path | None:
+    """The libraries of the ``palace-toolkit`` runtime, if it names any."""
+    if not _palace_toolkit_available():
+        return None
+    try:
+        from palacetoolkit.palace_runtime import (
+            resolve_palace_library_dir as _ptk_resolve_lib,
+        )
+
+        lib_dir = _ptk_resolve_lib()
+    except Exception as exc:
+        logger.debug(
+            "resolve_palace_library_dir: palacetoolkit resolver failed: %s",
+            exc,
+        )
+        return None
+    if lib_dir is not None and lib_dir.is_dir():
+        return lib_dir.resolve()
+    return None
+
+
 def resolve_palace_library_dir() -> Path | None:
     """Return the Palace library directory (for ``LD_LIBRARY_PATH``).
+
+    The first bundled runtime that ships libraries, whichever binary is
+    used; :attr:`PalaceRuntime.library_dir` is the one that matches a
+    resolved binary.
 
     Returns:
     -------
     Path | None
     """
-    if _palace_cpu_available():
-        from palacetoolkit_palace_cpu import palace_library_path
-
-        lib_dir = palace_library_path()
-        if lib_dir.is_dir():
-            return lib_dir.resolve()
-
-    cached = _cached_library_dir()
-    if cached is not None:
-        return cached.resolve()
-
-    if _palace_toolkit_available():
-        try:
-            from palacetoolkit.palace_runtime import (
-                resolve_palace_library_dir as _ptk_resolve_lib,
-            )
-
-            lib_dir = _ptk_resolve_lib()
-        except Exception as exc:
-            logger.debug(
-                "resolve_palace_library_dir: palacetoolkit resolver failed: %s",
-                exc,
-            )
-            return None
-        if lib_dir is not None and lib_dir.is_dir():
-            return lib_dir.resolve()
-
-    return None
+    return (
+        _cpu_package_library_dir()
+        or _resolved(_cached_library_dir())
+        or _toolkit_library_dir()
+    )
 
 
 def _binary_is_runnable(
@@ -468,6 +558,260 @@ def _binary_is_runnable(
         except Exception:
             continue
     return True  # fallback: just being executable is enough
+
+
+_SIF_CANDIDATES = (
+    Path("Palace.sif"),
+    Path("palace.sif"),
+    Path("bin/Palace.sif"),
+    Path("bin/palace.sif"),
+)
+
+
+@dataclass(frozen=True)
+class PalaceLaunch:
+    """How to start Palace locally: the command before its arguments, and its env."""
+
+    command: tuple[str, ...]
+    """``(binary,)``, or ``("apptainer", "run", sif)``."""
+    env: dict[str, str]
+    """The process environment, with a bundled runtime's libraries on
+    ``LD_LIBRARY_PATH``."""
+    apptainer: bool = False
+
+    @property
+    def binary(self) -> str:
+        """The executable that runs, as an abort report names it."""
+        return self.command[0]
+
+
+def _first_existing(
+    roots: Sequence[Path], candidates: Sequence[Path], *, executable: bool = False
+) -> Path | None:
+    """The first ``root / candidate`` that exists (and is executable, if asked)."""
+    for root in roots:
+        for rel in candidates:
+            candidate = (root / rel).resolve()
+            if candidate.exists() and (not executable or os.access(candidate, os.X_OK)):
+                return candidate
+    return None
+
+
+def resolve_launch(
+    *,
+    executable: str | Path | None = None,
+    sif: str | Path | None = None,
+    use_apptainer: bool = False,
+    search_roots: Sequence[Path] = (),
+    verbose: bool = False,
+) -> PalaceLaunch:
+    """Decide which Palace runs a local simulation, and how.
+
+    An executable wins over a SIF. When neither is given, the precedence is
+    ``PALACE_EXECUTABLE``, then ``bin/palace`` under one of ``search_roots``,
+    then — unless ``use_apptainer`` and a SIF (``PALACE_SIF`` or a
+    ``Palace.sif`` under the roots) is available — the binary that
+    :func:`resolve_palace_runtime` finds, falling back to ``palace`` on
+    ``PATH``.
+
+    Args:
+        executable: Palace executable to run directly.
+        sif: Palace Apptainer image.
+        use_apptainer: Run the SIF through Apptainer when no executable is
+            selected.
+        search_roots: Directories searched for ``bin/palace`` and a SIF.
+        verbose: Log which binary was chosen and its version.
+
+    Returns:
+        The :class:`PalaceLaunch`.
+
+    Raises:
+        FileNotFoundError: If the chosen SIF or executable does not exist or
+            is not executable.
+        RuntimeError: If Apptainer is asked for but not installed.
+    """
+    roots: list[Path] = []
+    for root in search_roots:
+        resolved = Path(root).expanduser().resolve()
+        if resolved not in roots:
+            roots.append(resolved)
+
+    if sif is None:
+        sif = os.environ.get("PALACE_SIF") or _first_existing(roots, _SIF_CANDIDATES)
+        if sif is not None and verbose and "PALACE_SIF" not in os.environ:
+            logger.info("Auto-discovered Palace SIF: %s", sif)
+    if executable is None:
+        executable = os.environ.get("PALACE_EXECUTABLE") or None
+    if executable is None:
+        # Prefer a local Palace executable when available, even when a SIF is
+        # configured via PALACE_SIF. This keeps local developer workflows on
+        # native binaries by default.
+        executable = _first_existing(roots, [Path("bin/palace")], executable=True)
+        if executable is not None and verbose:
+            logger.info("Auto-discovered Palace executable: %s", executable)
+
+    if use_apptainer and executable is None and sif is not None:
+        sif_path = Path(sif).expanduser().resolve()
+        if not sif_path.exists():
+            raise FileNotFoundError(
+                f"Palace SIF file not found: {sif_path}. "
+                "Install Palace via Apptainer or provide correct path."
+            )
+        if shutil.which("apptainer") is None:
+            raise RuntimeError(
+                "Apptainer not found. Install Apptainer to run local simulations "
+                "with use_apptainer=True."
+            )
+        return PalaceLaunch(
+            ("apptainer", "run", str(sif_path)), os.environ.copy(), apptainer=True
+        )
+
+    if use_apptainer and verbose:
+        logger.info(
+            "Using Palace executable (%s); ignoring use_apptainer=True.",
+            executable or "palace",
+        )
+
+    library_dir: Path | None = None
+    if executable is not None:
+        exe_path = Path(executable).expanduser().resolve()
+    else:
+        found = resolve_palace_runtime()
+        if found is None:
+            exe_path = Path("palace")
+        else:
+            exe_path, library_dir = found.binary, found.library_dir
+            if verbose:
+                _log_runtime(found)
+
+    if not exe_path.exists():
+        on_path = shutil.which(str(exe_path))
+        if on_path is None:
+            raise FileNotFoundError(
+                f"Palace executable not found: {exe_path}. "
+                "Install Palace directly or provide correct path via "
+                "palace_executable, or let gsim auto-download the "
+                "prebuilt CPU runtime (Linux x86_64)."
+            )
+        exe_path = Path(on_path)
+    if not os.access(exe_path, os.X_OK):
+        raise FileNotFoundError(
+            f"Palace executable is not executable: {exe_path}. "
+            "Update file permissions or provide a valid executable path."
+        )
+
+    env = os.environ.copy()
+    if library_dir is not None:
+        prior = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = f"{library_dir}:{prior}" if prior else str(library_dir)
+        logger.debug(
+            "Injected LD_LIBRARY_PATH for bundled Palace: %s", env["LD_LIBRARY_PATH"]
+        )
+    return PalaceLaunch((str(exe_path),), env)
+
+
+def _log_runtime(found: PalaceRuntime) -> None:
+    """Log a resolved runtime and, when it answers, its version."""
+    logger.info("Palace binary: %s  (source: %s)", found.binary, found.source)
+    with suppress(Exception):
+        version = subprocess.run(  # noqa: S603
+            [str(found.binary), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if version.returncode == 0:
+            logger.info(version.stdout.strip())
+
+
+def run_palace(
+    launch: PalaceLaunch,
+    *,
+    cwd: Path,
+    num_processes: int,
+    num_threads: int | None = None,
+    verbose: bool = True,
+    emit: Callable[[str], None] | None = None,
+) -> None:
+    """Run Palace on the ``config.json`` in ``cwd``.
+
+    Args:
+        launch: Which Palace, and how, from :func:`resolve_launch`.
+        cwd: The simulation directory.
+        num_processes: MPI ranks.
+        num_threads: OpenMP threads, when set.
+        verbose: Stream Palace's output line by line through ``emit``.
+        emit: Where streamed lines go; defaults to this module's logger.
+
+    Raises:
+        subprocess.CalledProcessError: If Palace exits nonzero, carrying the
+            tail of its output on ``stderr``.
+        RuntimeError: If the launcher itself cannot be found.
+    """
+    emit = emit or logger.info
+    cmd = [*launch.command, "-np", str(num_processes)]
+    if num_threads is not None:
+        cmd.extend(["-nt", str(num_threads)])
+    cmd.append("config.json")
+    if verbose:
+        how = "via Apptainer" if launch.apptainer else "directly"
+        emit(f"Running Palace simulation in {cwd} {how}")
+        emit(f"Command: {' '.join(cmd)}")
+        emit(f"Processes: {num_processes}")
+
+    try:
+        if verbose:
+            streamed_lines: list[str] = []
+            with subprocess.Popen(  # noqa: S603
+                cmd,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=launch.env,
+            ) as process:
+                if process.stdout is not None:
+                    for line in process.stdout:
+                        line = line.rstrip("\n")
+                        streamed_lines.append(line)
+                        if line:
+                            emit(line)
+                returncode = process.wait()
+            if returncode != 0:
+                # The output was streamed as it arrived, so a report quoting
+                # the decisive line loses nothing a user has not already seen.
+                raise subprocess.CalledProcessError(
+                    returncode,
+                    cmd,
+                    output="",
+                    stderr="\n".join(streamed_lines[-_FAILURE_OUTPUT_TAIL_LINES:]),
+                )
+        else:
+            result = subprocess.run(  # noqa: S603
+                cmd,
+                cwd=cwd,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=launch.env,
+            )
+            if result.stdout:
+                logger.debug(result.stdout)
+            if result.stderr:
+                logger.warning(result.stderr)
+    except FileNotFoundError as e:
+        if launch.apptainer:
+            raise RuntimeError(
+                "Apptainer not found. Install Apptainer to run local simulations "
+                "with use_apptainer=True."
+            ) from e
+        raise RuntimeError(
+            "Palace executable not found. Install Palace directly or provide "
+            "correct path via palace_executable parameter, "
+            "or set PALACE_EXECUTABLE environment variable."
+        ) from e
 
 
 # Return codes carry POSIX signal numbers, even on a Windows host whose own

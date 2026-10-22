@@ -821,6 +821,9 @@ class TestResolvePalaceBinary:
                 return fake_ptk_bin
 
         with pytest.MonkeyPatch().context() as mp:
+            mp.delenv("PALACE_BIN", raising=False)
+            mp.delenv("PALACE_EXECUTABLE", raising=False)
+            mp.setattr("gsim.palace.runtime.shutil.which", lambda _: None)
             mp.setitem(sys.modules, "palacetoolkit_palace_cpu", _FakePalaceCPU())
             mp.setattr("gsim.palace.runtime._palace_cpu_available", lambda: True)
             mp.setattr("gsim.palace.runtime._palace_toolkit_available", lambda: False)
