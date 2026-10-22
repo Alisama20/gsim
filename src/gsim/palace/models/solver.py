@@ -38,6 +38,10 @@ def warn_legacy_solver_setting(
     )
 
 
+# Palace's error estimator keys in its read order, written last in Solver.Linear.
+_ESTIMATOR_KEYS = ("EstimatorTol", "EstimatorMaxIts", "EstimatorMG")
+
+
 class LinearSolverConfig(BaseModel):
     """Linear solve controls, shared by all Palace simulation types.
 
@@ -109,13 +113,19 @@ class LinearSolverConfig(BaseModel):
         }
         if self.solver_type == "Default" and self.preconditioner != "Default":
             config["Type"] = self.preconditioner
-        # Palace's read order; unset keys are resolved when the config is written.
-        estimator = {
-            "EstimatorTol": self.estimator_tolerance,
-            "EstimatorMaxIts": self.estimator_max_iterations,
-            "EstimatorMG": self.estimator_mg,
-        }
-        config.update({k: v for k, v in estimator.items() if v is not None})
+        # Unset keys are resolved when the config is written.
+        estimator = (
+            self.estimator_tolerance,
+            self.estimator_max_iterations,
+            self.estimator_mg,
+        )
+        config.update(
+            {
+                key: value
+                for key, value in zip(_ESTIMATOR_KEYS, estimator, strict=True)
+                if value is not None
+            }
+        )
         return config
 
 

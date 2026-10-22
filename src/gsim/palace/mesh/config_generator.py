@@ -21,6 +21,7 @@ from gsim.palace.mesh.metadata import (
     write_metadata,
 )
 from gsim.palace.mesh.quality import tetrahedron_distortion
+from gsim.palace.models.solver import _ESTIMATOR_KEYS
 from gsim.palace.ports.config import PortType
 
 logger = logging.getLogger(__name__)
@@ -268,8 +269,6 @@ def _to_section_frame(props: dict[str, Any], axis: str) -> dict[str, Any]:
     return out
 
 
-# Error estimator keys in Palace's read order; written last in Solver.Linear.
-_ESTIMATOR_KEYS = ("EstimatorTol", "EstimatorMaxIts", "EstimatorMG")
 # Without AMR nothing reads the indicator precisely, so a loose tolerance is
 # enough. With AMR it drives refinement, so Palace's defaults apply.
 _ESTIMATOR_DEFAULTS_AMR_OFF: Mapping[str, float | int | bool] = {"EstimatorTol": 1e-2}
@@ -277,8 +276,8 @@ _ESTIMATOR_DEFAULTS_AMR_ON: Mapping[str, float | int | bool] = {}
 
 
 def _resolve_estimator_settings(
-    linear: dict[str, object], refinement: RefinementConfig
-) -> dict[str, object]:
+    linear: dict[str, Any], refinement: RefinementConfig
+) -> None:
     """Fill unset error estimator keys in ``linear`` by AMR state, in place.
 
     Explicit values win key by key. All estimator keys are re-appended in
@@ -297,7 +296,6 @@ def _resolve_estimator_settings(
             "field energy instead of error and will not stop at refinement tol.",
             refinement.max_its,
         )
-    return linear
 
 
 def generate_palace_config(
@@ -425,8 +423,9 @@ def generate_palace_config(
             else SolverConfig()
         )
         solver_conf = defaults.to_solver_config()
-    linear_conf = cast("dict[str, object]", solver_conf["Linear"])
-    _resolve_estimator_settings(linear_conf, refinement_config)
+    _resolve_estimator_settings(
+        cast("dict[str, Any]", solver_conf["Linear"]), refinement_config
+    )
 
     if simulation_type == "driven":
         solver_conf["Driven"] = solver_driven
