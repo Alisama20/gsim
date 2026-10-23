@@ -2225,6 +2225,8 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
             hints["_impedance_boundaries"] = self._impedance_boundaries
         if getattr(self, "metallic_boundaries", False):
             hints["_metallic_boundaries"] = True
+        if getattr(self, "conductor_boundary", "conductivity") == "pec":
+            hints["_conductor_boundary"] = "pec"
 
         # BoundaryMode voltage/impedance postprocessing paths. They do not
         # affect the 2D eigenproblem; the boundary-mode sim declares them.
