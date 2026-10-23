@@ -1441,7 +1441,8 @@ def drop_internal_none_surfaces(
     """Remove internal faces from the ``*__None`` surface groups.
 
     A surface stays in its ``*__None`` group if it bounds exactly one
-    volume or lies flat on a face of the domain bounding box. Other
+    volume, or bounds none and lies flat on a face of the domain bounding
+    box. Other
     surfaces (a volume on both sides, e.g. the face shared by two touching
     conductor shells) are taken out, so they never become absorbing.
     ``pg_map`` is updated in place.
@@ -1474,10 +1475,11 @@ def drop_internal_none_surfaces(
         if gmsh.model.getPhysicalName(2, pg) != name:
             continue
         tags = [int(t) for t in gmsh.model.getEntitiesForPhysicalGroup(2, pg)]
+        # A face with a volume on both sides is internal wherever it is; the
+        # bounding-box test only rescues faces that bound no volume at all.
+        n_volumes = {t: len(gmsh.model.getAdjacencies(2, t)[0]) for t in tags}
         keep = [
-            t
-            for t in tags
-            if len(gmsh.model.getAdjacencies(2, t)[0]) == 1 or _on_box(t)
+            t for t in tags if n_volumes[t] == 1 or (n_volumes[t] == 0 and _on_box(t))
         ]
         if len(keep) == len(tags):
             continue

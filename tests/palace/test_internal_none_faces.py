@@ -144,6 +144,34 @@ def test_face_on_the_domain_box_is_kept(kernel):
     assert [int(t) for t in kept] == [on_box]
 
 
+def test_shared_face_near_the_domain_box_is_dropped(kernel):
+    """A face between two volumes is internal even within tol of a box side."""
+    kernel.addBox(0, 0, 0, 1, 1, 1)
+    kernel.addBox(0, 0, 1, 1, 1, 5e-4)  # thin top layer: z = 1 is 5e-4 from z-max
+    kernel.fragment([(3, 1)], [(3, 2)])
+    kernel.synchronize()
+    shared = next(
+        int(t)
+        for _, t in gmsh.model.getEntities(2)
+        if gmsh.model.getAdjacencies(2, t)[0].size == 2
+    )
+    top = next(
+        int(t)
+        for _, t in gmsh.model.getEntities(2)
+        if gmsh.model.getAdjacencies(2, t)[0].size == 1
+        and abs(gmsh.model.getBoundingBox(2, t)[2] - (1 + 5e-4)) < 1e-6
+    )
+
+    gmsh.model.addPhysicalGroup(2, [shared, top], tag=1, name="air__None")
+    pg_map = {"air__None": 1}
+
+    dropped = gmsh_utils.drop_internal_none_surfaces(pg_map)
+
+    assert dropped == {"air__None": [shared]}
+    kept = gmsh.model.getEntitiesForPhysicalGroup(2, pg_map["air__None"])
+    assert [int(t) for t in kept] == [top]
+
+
 def _msh_triangles(msh_path: Path, attributes: list[int]):
     """Node coordinates and triangles of the given tags (text MSH 2.2)."""
     lines = Path(msh_path).read_text().splitlines()
