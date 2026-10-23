@@ -49,7 +49,8 @@ _VIA_UNCHANGED_TOL = 1e-6
 # A via counts as touching a conductor when the z-ranges meet within this (um)
 _VIA_PLANE_TOL_UM = 1e-6
 
-# Pieces of clipped via area below this (um^2) are numerical slivers
+# Landing pieces below this area (um^2) are numerical slivers and are not added
+# to a clipped via; a drawn cut is kept whatever its size
 _MIN_VIA_PIECE_UM2 = 1e-6
 
 
@@ -756,7 +757,9 @@ def _clip_merged_vias(
     others the result is the drawn via area plus the parts of the merged
     polygon inside *landing* that share area with a drawn via. Merging then
     never adds area outside the metal above and below, and a landing piece
-    without a cut does not become a floating via chunk.
+    without a cut does not become a floating via chunk. Only added pieces of
+    ``_MIN_VIA_PIECE_UM2`` or less are left out as slivers; a drawn cut is kept
+    however small it is.
 
     Args:
         drawn: The via polygons as drawn.
@@ -779,11 +782,9 @@ def _clip_merged_vias(
         pieces = [
             part
             for part in _polygons_of(shape.intersection(landing))
-            if part.intersection(own).area > 1e-9
+            if part.area > _MIN_VIA_PIECE_UM2 and part.intersection(own).area > 1e-9
         ]
-        result.extend(
-            _shapes_to_via_polys(unary_union([own, *pieces]), _MIN_VIA_PIECE_UM2)
-        )
+        result.extend(_shapes_to_via_polys(unary_union([own, *pieces])))
     return result
 
 
@@ -1129,6 +1130,9 @@ def add_metals(
         if not layer_infos:
             continue
         for layer_info in layer_infos:
+            # One GDS layer can back several stack layers. Each starts from the
+            # drawn polygons, not from what a via level before it merged or clipped.
+            polys = polygons_by_layer[layernum]
             layer_name = layer_info["name"]
             layer_type = layer_info["type"]
             zmin = layer_info["zmin"]
