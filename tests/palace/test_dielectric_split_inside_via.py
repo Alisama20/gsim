@@ -20,6 +20,9 @@ from gsim.common.stack.extractor import Layer, LayerStack
 from gsim.palace import DrivenSim
 from gsim.palace.mesh.gmsh_utils import (
     Entity,
+    _face_outline,
+    _interior_points,
+    _lies_on_face,
     _refresh_2d,
     _snapshot_2d,
     run_boolean_pipeline,
@@ -172,16 +175,20 @@ def test_dielectric_split_inside_via_keeps_shells(tmp_path, reference, metals, s
 # --- the pipeline on a hand-built model -----------------------------------
 
 
-def _conductor_shell_and_via(kernel, conductor_box, via_box):
+def _conductor_shell_and_via(kernel, conductor_box, via_box, via_hole_box=None):
     """Make a via volume on a conductor and turn the conductor into a shell.
 
     Like ``add_metals``: both volumes are fragmented so that they share the
     contact face, then the conductor volume is removed and its faces are kept.
+    A ``via_hole_box`` is cut out of the via first (a ring-shaped via).
 
     Returns the via volume tag and the tags of the conductor's faces.
     """
     conductor = kernel.addBox(*conductor_box)
     via = kernel.addBox(*via_box)
+    if via_hole_box is not None:
+        (ring,), _ = kernel.cut([(3, via)], [(3, kernel.addBox(*via_hole_box))])
+        via = ring[1]
     _, out_map = kernel.fragment([(3, conductor)], [(3, via)])
     kernel.synchronize()
     (conductor_dimtag,) = out_map[0]
@@ -316,3 +323,134 @@ def test_refresh_does_not_trust_a_reused_tag(kernel, caplog):
         _refresh_2d(entities, snapshot, [])
     assert entities[0].dimtags == []
     assert "was lost" in caplog.text
+
+
+# --- a shell face with a hole (ring-shaped via footprint) -------------------
+
+
+def _ring_scene(kernel):
+    """A ring via on a conductor shell, with oxide that splits the ring footprint.
+
+    The conductor is 10 x 10 x 1; the ring via (6 x 6 outside, 2 x 2 hole) sits
+    on top of it, so the shell has a 32 um^2 annulus at z=1 with a 2 x 2 hole.
+    Two oxide blocks below that plane meet at x=5 and cut the annulus in two.
+    The oxide above the plane is one block: the fragment makes the hole filling
+    out of it, and its bottom face is a coplanar face inside the annulus hole.
+
+    Returns the entities of the model and the tag of the annulus.
+    """
+    via, shell_faces = _conductor_shell_and_via(
+        kernel,
+        (0, 0, 0, 10, 10, 1),
+        (2, 2, 1, 6, 6, 2),
+        via_hole_box=(4, 4, 0.5, 2, 2, 3),
+    )
+    (annulus,) = [t for t in shell_faces if np.isclose(kernel.getMass(2, t), 32.0)]
+    left = kernel.addBox(-2, -2, -2, 7, 14, 3)
+    right = kernel.addBox(5, -2, -2, 7, 14, 3)
+    upper = kernel.addBox(-2, -2, 1, 14, 14, 4)
+    kernel.synchronize()
+    volumes = [
+        Entity("via", 3, 1, [via]),
+        Entity("left", 3, 2, [left]),
+        Entity("right", 3, 2, [right]),
+        Entity("upper", 3, 2, [upper]),
+    ]
+    return volumes, shell_faces, annulus
+
+
+@pytest.mark.parametrize("whole_shell", [False, True])
+def test_pipeline_follows_split_ring_face(kernel, whole_shell):
+    """A holed shell face split by the fragment keeps its pieces, not the hole."""
+    volumes, shell_faces, annulus = _ring_scene(kernel)
+    tags = shell_faces if whole_shell else [annulus]
+    shell = Entity("shell", 2, 1, tags)
+    shell_area = _area(kernel, shell)
+    assert shell_area == pytest.approx(240.0 if whole_shell else 32.0)
+
+    run_boolean_pipeline([*volumes, shell])
+
+    assert _area(kernel, shell) == pytest.approx(shell_area)
+    # the annulus is now two halves of 16 um^2 each; on the whole shell the
+    # outer part of the same plane is split by the oxide too, into 32 um^2 pieces
+    halves = [
+        t
+        for _, t in shell.dimtags
+        if np.isclose(kernel.getCenterOfMass(2, t)[2], 1.0)
+        and np.isclose(kernel.getMass(2, t), 16.0)
+    ]
+    assert len(halves) == 2
+    for t in halves:
+        x, y, _ = kernel.getCenterOfMass(2, t)
+        assert not (4.0 < x < 6.0 and 4.0 < y < 6.0)
+
+
+def test_pipeline_drops_nothing_when_ring_face_is_not_split(kernel, caplog):
+    """No lateral boundary through the annulus: the face is matched as it is."""
+    via, shell_faces = _conductor_shell_and_via(
+        kernel,
+        (0, 0, 0, 10, 10, 1),
+        (2, 2, 1, 6, 6, 2),
+        via_hole_box=(4, 4, 0.5, 2, 2, 3),
+    )
+    (annulus,) = [t for t in shell_faces if np.isclose(kernel.getMass(2, t), 32.0)]
+    lower = kernel.addBox(-2, -2, -2, 14, 14, 3)
+    upper = kernel.addBox(-2, -2, 1, 14, 14, 4)
+    kernel.synchronize()
+    shell = Entity("shell", 2, 1, [annulus])
+    with caplog.at_level(logging.WARNING, logger="gsim.palace.mesh.gmsh_utils"):
+        run_boolean_pipeline(
+            [
+                Entity("via", 3, 1, [via]),
+                Entity("lower", 3, 2, [lower]),
+                Entity("upper", 3, 2, [upper]),
+                shell,
+            ]
+        )
+    assert "was lost" not in caplog.text
+    assert _area(kernel, shell) == pytest.approx(32.0)
+
+
+def _holed_face(kernel, curved):
+    """Return a planar face at z=0 with a hole, and the hole boundary."""
+    if curved:
+        outer = kernel.addDisk(5, 5, 0, 5, 5)
+        hole = kernel.addDisk(5, 5, 0, 2, 2)
+    else:
+        outer = kernel.addRectangle(0, 0, 0, 10, 10)
+        hole = kernel.addRectangle(4, 4, 0, 2, 2)
+    (face,), _ = kernel.cut([(2, outer)], [(2, hole)])
+    kernel.synchronize()
+    return face[1]
+
+
+@pytest.mark.parametrize("curved", [False, True])
+def test_outline_tells_ring_pieces_from_hole_faces(kernel, curved):
+    """Pieces on the ring pass the outline test; the hole and other planes fail."""
+    ring = _holed_face(kernel, curved)
+    # ring pieces: 2.06 <= r <= 3.04 from the centre (5, 5) / the left band of the box
+    piece = kernel.addRectangle(7, 4.5, 0, 1, 1)
+    plug = kernel.addDisk(5, 5, 0, 1.5, 1.5)
+    lifted = kernel.addDisk(7.5, 5, 1, 0.3, 0.3)
+    beside = kernel.addRectangle(20, 20, 0, 1, 1)
+    kernel.synchronize()
+    outline = _face_outline(ring)
+    assert outline is not None
+
+    assert _lies_on_face(_interior_points(piece), outline)
+    assert not _lies_on_face(_interior_points(plug), outline)
+    assert not _lies_on_face(_interior_points(lifted), outline)
+    assert not _lies_on_face(_interior_points(beside), outline)
+
+
+def test_curved_surface_has_no_outline_and_is_not_filtered(kernel):
+    """A non-planar face gets no outline, so the box test stays the only filter."""
+    cylinder = kernel.addCylinder(0, 0, 0, 0, 0, 2, 1)
+    kernel.synchronize()
+    sides = [
+        t for d, t in gmsh.model.getBoundary([(3, cylinder)], oriented=False) if d == 2
+    ]
+    (wall,) = [t for t in sides if gmsh.model.getType(2, t) == "Cylinder"]
+    assert _face_outline(wall) is None
+    assert _lies_on_face(np.array([[10.0, 10.0, 10.0]]), None)
+    assert _lies_on_face(np.empty((0, 3)), _face_outline(sides[0]))
