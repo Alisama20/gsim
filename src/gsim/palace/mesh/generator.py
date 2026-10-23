@@ -1223,7 +1223,6 @@ def generate_mesh(
     planar_conductors: bool = False,
     pec_blocks: list[PECBlockConfig] | None = None,
     absorbing_boundary: bool = True,
-    absorbing_order: int = 2,
     periodic_axis: str | None = None,
     symmetry_plane: SymmetryPlaneConfig | None = None,
     merge_via_distance: float = 2.0,
@@ -1242,6 +1241,7 @@ def generate_mesh(
     threads: int = 1,
     surface_threads: int = 1,
     split_conductors_by_net: bool = False,
+    absorbing_order: int = 2,
 ) -> MeshResult:
     """Generate mesh for Palace EM simulation.
 
@@ -1281,7 +1281,6 @@ def generate_mesh(
         pec_blocks: PEC configuration
         planar_conductors: If True, treat conductors as 2D PEC surfaces
         absorbing_boundary: If True, use absorbing boundary conditions on outer surfaces
-        absorbing_order: Order (1 or 2) of the absorbing boundary condition
         periodic_axis: ("x" or "y") for meshing constraints on opposite domain sides
         symmetry_plane: Optional PEC/PMC symmetry plane; only the kept half of
             the domain is meshed. Not supported with ``boundarymode`` or with
@@ -1314,6 +1313,7 @@ def generate_mesh(
             group per electrical net (``<name>@<net>``) and list the nets
             in ``groups["nets"]``. Needs ``write_config=False``, since the
             config needs the terminals. Ignored for boundary mode.
+        absorbing_order: Order (1 or 2) of the absorbing boundary condition
 
     Returns:
         MeshResult with paths and metadata
