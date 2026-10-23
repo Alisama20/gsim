@@ -287,7 +287,11 @@ Notes:
 written on S so that it also works when `Y` does not exist. Shorting terminals at the ports of a line ties them at its two
 ends only, not along its length; the two agree for an electrically short line. `mixed_mode(net, pairs)` returns
 differential ports first, common-mode ports next and unpaired terminals last, with reference impedances twice and half of
-the single-ended one, named `d(<first>,<second>)` and `c(<first>,<second>)`.
+the single-ended one, named `d(<first>,<second>)` and `c(<first>,<second>)`. The two terminals of a pair must have the
+same reference impedance: for different ones the plain sum and difference of the waves is not the mixed-mode transform
+(a matched two-port with `z0 = (50, 75)` ohm and `S = 0` has `S_dd = S_cc = -0.0101` with `se2gmm`, not 0), and
+`mixed_mode` raises `ValueError` instead of returning a wrong network. Renormalise the network to one impedance per pair
+first (`Network.renormalize`), or give the two terminals of a pair the same `z_ref` in `build_terminal_s`.
 
 Terminal S feeds scikit-rf directly. For a two-end coupled pair ordered (A1, B1, A2, B2), `Network.se2gmm(p=2)` pairs
 ports (0, 1) and (2, 3), puts the differential ports first and the common ports after, and defaults the reference

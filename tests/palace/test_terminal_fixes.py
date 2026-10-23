@@ -33,6 +33,7 @@ from gsim.palace.terminal_ports import (
     PortModes2D,
     align_gauge,
     build_terminal_s,
+    modes2d,
     port_mode_reference_voltages,
     port_modes_2d,
     port_terminal_matrices,
@@ -82,13 +83,14 @@ class TestQuadratureDefault:
 
     def test_the_matrices_are_read_with_it(self, monkeypatch):
         seen: list[int] = []
-        original = terminal_ports.voltage_line_integral
+        # the calls are made in the module that holds port_terminal_matrices
+        original = modes2d.voltage_line_integral
 
         def spy(field, path, *, nsamples, tol_um):
             seen.append(nsamples)
             return original(field, path, nsamples=nsamples, tol_um=tol_um)
 
-        monkeypatch.setattr(terminal_ports, "voltage_line_integral", spy)
+        monkeypatch.setattr(modes2d, "voltage_line_integral", spy)
         _, t_v, t_i, _ = line()
         fields = modes_from(t_v[F_MID], t_i[F_MID])
         port_terminal_matrices(fields, GSSG, domain=DOMAIN)
