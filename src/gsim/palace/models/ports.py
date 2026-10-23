@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import math
 import warnings
-from itertools import pairwise
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from gsim.palace.ports.modes import check_wave_port_modes
 
 if TYPE_CHECKING:
     from shapely import Polygon
@@ -413,42 +414,12 @@ class WavePortConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_modes(self) -> Self:
         """Check the mode list, the active mode and the pilot paths."""
-        if self.modes:
-            if len(set(self.modes)) != len(self.modes):
-                raise ValueError(f"modes lists a mode twice: {list(self.modes)}")
-            if min(self.modes) < 1:
-                raise ValueError("modes are 1-based Palace mode numbers")
-            if self.active_mode is None:
-                raise ValueError("active_mode is required with modes")
-            if self.active_mode not in self.modes:
-                raise ValueError(
-                    f"active_mode {self.active_mode} is not in modes {list(self.modes)}"
-                )
-        if self.active_mode is not None and self.mode != self.active_mode:
-            raise ValueError(
-                f"mode ({self.mode}) and active_mode ({self.active_mode}) "
-                "must agree: the active entry follows the active mode"
-            )
-        known = self.modes or (self.mode,)
-        for mode, path in (self.pilot_paths or {}).items():
-            if mode not in known:
-                raise ValueError(
-                    f"pilot_paths has mode {mode}, which is not one of {list(known)}"
-                )
-            if len(path) < 2:
-                raise ValueError(f"pilot path of mode {mode} needs 2+ points")
-            for point in path:
-                if len(point) != 3 or not all(math.isfinite(c) for c in point):
-                    raise ValueError(
-                        f"pilot path of mode {mode}: points are finite "
-                        f"(x, y, z) in um, got {point}"
-                    )
-            for first, second in pairwise(path):
-                if first == second:
-                    raise ValueError(
-                        f"pilot path of mode {mode} repeats the point {first}; "
-                        "Palace aborts on a zero-length segment"
-                    )
+        check_wave_port_modes(
+            mode=self.mode,
+            modes=self.modes,
+            active_mode=self.active_mode,
+            pilot_paths=self.pilot_paths,
+        )
         return self
 
 

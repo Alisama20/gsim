@@ -398,10 +398,15 @@ class TestSidecarChecks:
         faces = [
             ("a", (0.0, 0.0), 0.0),
             ("b", (0.0, 0.0), 360.0),
-            ("c", (0.0, 0.0), 180.0),
-            ("d", (5.0, 0.0), 0.0),
+            ("c", (0.0, 0.0), 180.0),  # faces the other way: the same face
+            ("d", (5.0, 0.0), 0.0),  # somewhere else
+            ("e", (0.0, 0.0), 90.0),  # across the other axis
         ]
-        assert same_face_pairs(faces) == [("a", "b")]
+        assert same_face_pairs(faces) == [
+            ("a", "b"),
+            ("a", "c"),
+            ("b", "c"),
+        ]
 
 
 class TestSimApi:

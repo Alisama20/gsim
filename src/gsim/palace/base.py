@@ -1364,6 +1364,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
                 if not wp.layer
             )
             errors.extend(self._multimode_wave_port_errors(wave_ports))
+            errors.extend(self._wave_port_face_errors(wave_ports))
 
         eigenmode = self._get_problem_settings("eigenmode")
         if eigenmode is not None and eigenmode.target is None:
@@ -1477,6 +1478,78 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
             for first, second in same_face_pairs(faces)
         )
         return errors
+
+    def _wave_port_face_errors(self, wave_ports: list[Any]) -> list[str]:
+        """Errors for wave ports whose generated faces overlap.
+
+        The mesher builds one rectangle per wave port: a ``max_size`` port
+        spans the whole side of the domain whatever its centre, margins widen
+        a face. Where two rectangles overlap the boolean pass merges them, one
+        port keeps no surface and ``write_config()`` emits no ``WavePort``
+        entry for it. The rectangles are built here with the mesher's own
+        function. The domain margins are only known at ``mesh()``, so the
+        domain is left unbounded, which does not change which faces overlap.
+        The mesher repeats the check with the real domain.
+        """
+        component = self.geometry.component if self.geometry else None
+        if component is None or len(wave_ports) < 2:
+            return []
+        from gsim.palace.mesh.geometry import (
+            UNBOUNDED_DOMAIN,
+            overlapping_wave_ports,
+            wave_port_overlap_message,
+        )
+        from gsim.palace.ports.config import PalacePort, PortType
+        from gsim.palace.ports.modes import same_face_pairs
+
+        by_name = {port.name: port for port in component.ports}
+        ports = [
+            PalacePort(
+                name=wp.name,
+                port_type=PortType.WAVEPORT,
+                center=(
+                    float(by_name[wp.name].center[0]),
+                    float(by_name[wp.name].center[1]),
+                ),
+                width=float(by_name[wp.name].width),
+                orientation=float(by_name[wp.name].orientation or 0.0),
+                layer=wp.layer,
+                z_margin=wp.z_margin,
+                lateral_margin=wp.lateral_margin,
+                max_size=wp.max_size,
+            )
+            for wp in wave_ports
+            if wp.layer and wp.name in by_name
+        ]
+        if len(ports) < 2:
+            return []
+        # Resolving the stack must not leave a stack behind: set_stack() may
+        # still follow, and mesh() resolves it again.
+        previous = self.stack
+        try:
+            stack = self._resolve_stack()
+        except Exception:
+            return []  # the mesher reports a stack that does not resolve
+        finally:
+            self.stack = previous
+        # A pair on the same face is already reported by the multimode check
+        reported = (
+            {
+                frozenset(pair)
+                for pair in same_face_pairs(
+                    (p.name, p.center, p.orientation) for p in ports
+                )
+            }
+            if any(wp.modes for wp in wave_ports)
+            else set()
+        )
+        return [
+            wave_port_overlap_message(first, second)
+            for first, second in overlapping_wave_ports(
+                ports, stack, domain_bounds=UNBOUNDED_DOMAIN
+            )
+            if frozenset((first, second)) not in reported
+        ]
 
     def _find_gf_port(self, port_name: str):
         """Find a gdsfactory port by name."""

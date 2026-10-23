@@ -23,24 +23,26 @@ import json
 import math
 from collections import defaultdict
 from dataclasses import asdict, dataclass
+from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
 PORT_MODES_FILENAME = "port_modes.json"
 """Name of the sidecar next to ``config.json``."""
 
 FACE_POSITION_TOL_UM = 1e-6
 """Two ports whose centres agree to this distance and whose orientations agree
-are on the same face."""
+(modulo 180 degrees) are on the same face."""
 
 __all__ = [
     "FACE_POSITION_TOL_UM",
     "PORT_MODES_FILENAME",
     "PortModeEntry",
     "check_port_mode_entries",
+    "check_wave_port_modes",
     "faces_by_index",
     "read_port_modes",
     "same_face_pairs",
@@ -108,6 +110,71 @@ def check_port_mode_entries(entries: Sequence[PortModeEntry]) -> None:
         modes = [entry.mode for entry in group]
         if len(set(modes)) != len(modes):
             raise ValueError(f"Wave port {name!r} lists a mode twice: {sorted(modes)}.")
+
+
+def check_wave_port_modes(
+    *,
+    mode: int,
+    modes: Sequence[int],
+    active_mode: int | None,
+    pilot_paths: Mapping[int, Sequence[Sequence[float]]] | None,
+    active_name: str = "active_mode",
+) -> None:
+    """Refuse an inconsistent mode list, active mode or set of pilot paths.
+
+    One rule set for both ways to declare a wave port: the ``WavePortConfig``
+    model and the metadata ``configure_wave_port`` writes on a component port.
+
+    Args:
+        mode: The mode the port excites; with ``modes`` it is the active one.
+        modes: The Palace modes followed on the face (empty: an ordinary port).
+        active_mode: The active mode as declared, or None when not given.
+        pilot_paths: ``{mode: points}`` of ``(x, y, z)`` um points, or None.
+        active_name: How the messages call the active mode.
+
+    Raises:
+        ValueError: For a mode listed twice, a mode below 1, a missing or
+            unlisted active mode, an active mode that differs from ``mode``,
+            or a pilot path for a mode the port does not follow, with fewer
+            than two points, with a point that is not a finite ``(x, y, z)``
+            or with two equal points in a row.
+    """
+    if modes:
+        if len(set(modes)) != len(modes):
+            raise ValueError(f"modes lists a mode twice: {list(modes)}")
+        if min(modes) < 1:
+            raise ValueError("modes are 1-based Palace mode numbers")
+        if active_mode is None:
+            raise ValueError(f"{active_name} is required with modes")
+        if active_mode not in modes:
+            raise ValueError(
+                f"{active_name} {active_mode} is not in modes {list(modes)}"
+            )
+    if active_mode is not None and mode != active_mode:
+        raise ValueError(
+            f"mode ({mode}) and {active_name} ({active_mode}) "
+            "must agree: the active entry follows the active mode"
+        )
+    known = tuple(modes) or (mode,)
+    for key, path in (pilot_paths or {}).items():
+        if key not in known:
+            raise ValueError(
+                f"pilot_paths has mode {key}, which is not one of {list(known)}"
+            )
+        if len(path) < 2:
+            raise ValueError(f"pilot path of mode {key} needs 2+ points")
+        for point in path:
+            if len(point) != 3 or not all(math.isfinite(c) for c in point):
+                raise ValueError(
+                    f"pilot path of mode {key}: points are finite "
+                    f"(x, y, z) in um, got {point}"
+                )
+        for first, second in pairwise(path):
+            if first == second:
+                raise ValueError(
+                    f"pilot path of mode {key} repeats the point {first}; "
+                    "Palace aborts on a zero-length segment"
+                )
 
 
 def faces_by_index(entries: Iterable[PortModeEntry]) -> dict[int, str]:
@@ -197,16 +264,19 @@ def same_face_pairs(
         tol_um: Distance below which two centres are the same place.
 
     Returns:
-        The ``(name, name)`` pairs whose centres and orientations (modulo 360
-        degrees) agree. A multimode port puts all its modes on one face with
-        ``modes=``, so two ports there would be two surfaces on one place.
+        The ``(name, name)`` pairs whose centres agree and whose orientations
+        agree modulo 180 degrees. A face has no front for this purpose: ports
+        that face opposite ways at one place (0 and 180, or 90 and 270
+        degrees) build the same rectangle. A multimode port puts all its
+        modes on one face with ``modes=``, so two ports there would be two
+        surfaces on one place.
     """
     items = list(faces)
     pairs: list[tuple[str, str]] = []
     for i, (name_a, centre_a, angle_a) in enumerate(items):
         for name_b, centre_b, angle_b in items[i + 1 :]:
-            turn = (angle_a - angle_b) % 360.0
-            aligned = min(turn, 360.0 - turn) < 1e-6
+            turn = (angle_a - angle_b) % 180.0
+            aligned = min(turn, 180.0 - turn) < 1e-6
             apart = math.dist(centre_a, centre_b)
             if aligned and apart <= tol_um:
                 pairs.append((name_a, name_b))

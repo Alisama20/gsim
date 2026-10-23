@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Literal
 
+from gsim.palace.ports.modes import check_wave_port_modes
+
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
@@ -439,6 +441,13 @@ def configure_wave_port(
         pilot_paths: Optional ``{mode: points}`` of ``(x, y, z)`` um
             points, each a Palace ``VoltagePath``.
 
+    Raises:
+        ValueError: If the mode list or the pilot paths are inconsistent
+            (a mode twice or below 1, ``mode`` not in ``modes``, a pilot
+            path for a mode the port does not follow, a malformed path).
+            The checks are those of ``WavePortConfig``; nothing is written
+            to the ports when one fails.
+
     Examples:
         ```python
         configure_wave_port(
@@ -449,6 +458,20 @@ def configure_wave_port(
         )  # all ports
         ```
     """
+    # The same checks as WavePortConfig, before any port is touched
+    mode_list = [int(m) for m in modes]
+    paths = {
+        int(m): [[float(c) for c in pt] for pt in path]
+        for m, path in (pilot_paths or {}).items()
+    }
+    check_wave_port_modes(
+        mode=mode,
+        modes=mode_list,
+        active_mode=mode if mode_list else None,
+        pilot_paths=paths,
+        active_name="mode",
+    )
+
     # Handle single port or iterable
     port_list = [ports] if hasattr(ports, "info") else ports
 
@@ -466,11 +489,10 @@ def configure_wave_port(
         port.info["eigensolver_ksp_tol"] = eigensolver_ksp_tol
         port.info["eigensolver_max_size"] = eigensolver_max_size
         port.info["eigensolver_verbose"] = eigensolver_verbose
-        port.info["modes"] = [int(m) for m in modes]
+        port.info["modes"] = list(mode_list)
         port.info["excite_modes"] = excite_modes
         port.info["pilot_paths"] = [
-            {"mode": int(m), "path": [[float(c) for c in pt] for pt in path]}
-            for m, path in (pilot_paths or {}).items()
+            {"mode": m, "path": [list(pt) for pt in path]} for m, path in paths.items()
         ]
 
 
