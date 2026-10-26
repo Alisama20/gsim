@@ -471,7 +471,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
         yaml_path: str | Path | None = None,
         air_above: float | None = None,
         air_below: float | None = None,
-        substrate_thickness: float = 2.0,
+        substrate_thickness: float | None = None,
         include_substrate: bool = False,
         add_oxide_dielectric: bool = True,
         **kwargs,
@@ -497,10 +497,26 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
             yaml_path: Path to custom YAML stack file.
             air_above: Deprecated and ignored. Use set_airbox().
             air_below: Deprecated and ignored. Use set_airbox().
-            substrate_thickness: Thickness below z=0 in um.
-            include_substrate: Include lossy silicon substrate.
+            substrate_thickness: Depth below ``z=0`` in um (2.0 when omitted).
+                Without ``include_substrate`` it is the depth of the oxide fill
+                and the bottom of the stack. With ``include_substrate`` it is
+                the thickness of the silicon substrate; a stack with shaped
+                (photonic) dielectrics keeps the PDK's own substrate depth if
+                that is deeper.
+            include_substrate: Include lossy silicon substrate (default
+                ``False``). With ``False`` the PDK's substrate layer is left
+                out of the simulation, so changing its thickness in the PDK
+                stack changes neither the mesh nor the config; the domain
+                bottom is then the oxide bottom (``-substrate_thickness``)
+                minus ``set_airbox(z_below=...)``. A warning is logged when
+                the PDK substrate and these settings disagree.
             add_oxide_dielectric: Add synthetic oxide background dielectric.
             **kwargs: Additional args passed to extract_layer_stack.
+
+        The bottom of the Palace domain is the lowest dielectric of the
+        resolved stack minus ``set_airbox(z_below=...)``. To move it, change
+        ``substrate_thickness`` (with ``include_substrate=True`` for a silicon
+        substrate), ``z_below``, or pass a custom ``LayerStack``.
 
         Example:
             >>> sim.set_stack(substrate_thickness=2.0)
@@ -520,11 +536,14 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
 
         self._stack_kwargs = {
             "yaml_path": yaml_path,
-            "substrate_thickness": substrate_thickness,
             "include_substrate": include_substrate,
             "add_oxide_dielectric": add_oxide_dielectric,
             **kwargs,
         }
+        # Left out when unset so the stack builder can tell the 2.0 um default
+        # from a value the user chose, and warn only about the former.
+        if substrate_thickness is not None:
+            self._stack_kwargs["substrate_thickness"] = substrate_thickness
         # Stack will be resolved lazily during mesh() or simulate()
         self.stack = None
 
@@ -563,7 +582,11 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
             z_above: Airbox extension above the stack top (um).
                 Defaults to ``0.0`` when omitted.
             z_below: Airbox extension below the stack bottom (um).
-                Defaults to ``0.0`` when omitted.
+                Defaults to ``0.0`` when omitted. The stack bottom is the
+                lowest dielectric region: the silicon substrate with
+                ``set_stack(include_substrate=True)``, otherwise the oxide
+                bottom at ``-substrate_thickness``. A substrate layer left out
+                of the stack does not move it.
             material: Background material name for the padded region
                 (default ``"air"``).
         """
@@ -594,6 +617,38 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
             "z_below": zb,
             "material": material,
         }
+
+    def _warn_if_substrate_omitted(self, stack: LayerStack) -> None:
+        """Warn when a substrate layer of the stack cannot move the domain bottom.
+
+        With ``include_substrate=False`` (the default) the PDK's substrate layer
+        is left out of the stack, so a different silicon thickness there gives
+        the same mesh and config. This matters once ``set_airbox(z_below=...)``
+        is used to place the bottom boundary: it is measured from the oxide
+        bottom, not from the silicon.
+        """
+        omitted = getattr(stack, "omitted_substrate_layers", None)
+        z_below = (self._airbox_config or {}).get("z_below") or 0.0
+        if not omitted or z_below <= 0:
+            return
+        from gsim.palace.mesh.geometry import _resolve_stack_z_extent
+
+        z_bottom, _ = _resolve_stack_z_extent(stack, True)
+        layers = ", ".join(
+            f"'{d['name']}' ({d['thickness']:g} um, z={d['zmin']:g} to {d['zmax']:g})"
+            for d in omitted
+        )
+        logger.warning(
+            "The stack's substrate layer %s is not part of the domain because "
+            "include_substrate=False, so its thickness does not move the domain "
+            "bottom. The bottom is z=%g um (stack bottom) minus "
+            "set_airbox(z_below=%g). Use set_stack(include_substrate=True) to "
+            "mesh the substrate, or set substrate_thickness / z_below to move "
+            "the bottom.",
+            layers,
+            z_bottom,
+            z_below,
+        )
 
     def _resolve_domain_margins(self, mesh_config) -> tuple[float, float]:
         """Lateral margins for the mesh domain, excluding the airbox expansion.
@@ -1620,6 +1675,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
 
         # Resolve stack
         stack = self._resolve_stack()
+        self._warn_if_substrate_omitted(stack)
         airbox_cfg = self._airbox_config or {}
         domain_margin_x, domain_margin_y = self._resolve_domain_margins(mesh_config)
 
@@ -1887,6 +1943,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
 
         # Resolve stack
         stack = self._resolve_stack()
+        self._warn_if_substrate_omitted(stack)
 
         # Get ports
         ports = self._get_ports_for_preview(stack)

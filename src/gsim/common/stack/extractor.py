@@ -12,7 +12,7 @@ from typing import Literal
 
 import yaml
 from gdsfactory.technology import LayerStack as GfLayerStack
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from gsim.common.materials.registry import get_project_material_cards
 from gsim.common.stack._layer_utils import classify_layer_type, get_gds_layer_tuple
@@ -23,6 +23,9 @@ from gsim.common.stack.materials import (
 from gsim.common.stack.rf_materials import constant_rf_properties
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_SUBSTRATE_THICKNESS = 2.0
+"""Depth below ``z=0`` (um) used when ``substrate_thickness`` is not given."""
 
 
 class Layer(BaseModel):
@@ -120,6 +123,25 @@ class LayerStack(BaseModel):
     materials: dict[str, dict] = Field(default_factory=dict)
     dielectrics: list[dict] = Field(default_factory=list)
     simulation: dict = Field(default_factory=dict)
+
+    # Substrate layers of the source PDK stack that ``extract_layer_stack`` left
+    # out because ``include_substrate=False``. Informational only: not part of
+    # the serialized stack, so YAML output and solver inputs are unaffected.
+    _omitted_substrate_layers: list[dict] = PrivateAttr(default_factory=list)
+
+    @property
+    def omitted_substrate_layers(self) -> list[dict]:
+        """Substrate layers dropped from the stack (``include_substrate=False``).
+
+        Each entry has ``name``, ``material``, ``zmin``, ``zmax`` and
+        ``thickness`` (um). Empty when the substrate was included or the
+        source stack had none.
+        """
+        return list(self._omitted_substrate_layers)
+
+    def record_omitted_substrate_layers(self, layers: list[dict]) -> None:
+        """Remember substrate layers left out of the stack (informational)."""
+        self._omitted_substrate_layers = list(layers)
 
     @classmethod
     def from_layer_list(cls, layerList: list[Layer]) -> LayerStack:
@@ -331,7 +353,7 @@ class LayerStack(BaseModel):
 def extract_layer_stack(
     gf_layer_stack: GfLayerStack,
     pdk_name: str = "unknown",
-    substrate_thickness: float = 2.0,
+    substrate_thickness: float | None = None,
     air_above: float = 0.0,
     air_below: float = 0.0,
     boundary_margin: float = 30.0,
@@ -343,11 +365,23 @@ def extract_layer_stack(
     Args:
         gf_layer_stack: gdsfactory LayerStack object
         pdk_name: Name of the PDK (for documentation)
-        substrate_thickness: Thickness of substrate in um (default: 2.0)
+        substrate_thickness: Depth below ``z=0`` (um) of the bottom of the
+            stack, default 2.0 when omitted. With ``include_substrate=False``
+            it is the depth of the oxide fill, and the PDK's substrate layer
+            is left out of the stack altogether (see ``include_substrate``).
+            With ``include_substrate=True`` it is the thickness of the
+            silicon substrate; for a stack with shaped (photonic) dielectrics
+            it can only deepen the PDK's substrate, never make it shallower.
+            A warning is logged when the value (or the 2.0 um default) and
+            the PDK's substrate layer disagree.
         air_above: Height of air box above top dielectric in um (default: 0.0)
         air_below: Height of air box below substrate/oxide in um (default: 0.0)
         boundary_margin: Lateral margin from GDS bbox in um (default: 30)
-        include_substrate: Whether to include lossy substrate (default: False)
+        include_substrate: Whether to include lossy substrate (default: False).
+            When False, the PDK's substrate layer (and its thickness) does not
+            enter the stack: changing the Si thickness in the PDK stack changes
+            nothing. The omitted layers are listed in
+            :attr:`LayerStack.omitted_substrate_layers`.
         add_oxide_dielectric: Add synthetic oxide background dielectric region.
             Set False to rely on dielectric regions/layers provided by the PDK.
 
@@ -358,7 +392,11 @@ def extract_layer_stack(
     # (not substrate layer 999), it's a photonic stack and the BOX
     # should be preserved as SiO2 rather than merged into the substrate.
     has_patterned_dielectrics = False
+    explicit_substrate_thickness = substrate_thickness is not None
+    if substrate_thickness is None:
+        substrate_thickness = DEFAULT_SUBSTRATE_THICKNESS
     stack = LayerStack(pdk_name=pdk_name)
+    omitted_substrate_layers: list[dict] = []
 
     z_min_overall = float("inf")
     z_max_overall = float("-inf")
@@ -404,6 +442,15 @@ def extract_layer_stack(
         sidewall_angle = getattr(layer_level, "sidewall_angle", 0.0) or 0.0
 
         if layer_type == "substrate" and not include_substrate:
+            omitted_substrate_layers.append(
+                {
+                    "name": layer_name,
+                    "material": material,
+                    "zmin": zmin,
+                    "zmax": zmax,
+                    "thickness": thickness,
+                }
+            )
             continue
 
         layer = Layer(
@@ -567,6 +614,16 @@ def extract_layer_stack(
             # Extend substrate below the PDK's substrate z-range
             if substrate_zmin is not None:
                 sub_zmin = min(substrate_zmin, -substrate_thickness)
+                if explicit_substrate_thickness and (
+                    -substrate_thickness > substrate_zmin + 1e-9
+                ):
+                    logger.warning(
+                        "substrate_thickness=%g um is shallower than the stack's "
+                        "substrate (bottom at z=%g um); the substrate keeps the "
+                        "stack's depth, substrate_thickness can only deepen it.",
+                        substrate_thickness,
+                        substrate_zmin,
+                    )
             else:
                 sub_zmin = -substrate_thickness
 
@@ -603,7 +660,31 @@ def extract_layer_stack(
                 )
                 oxide_zmin = 0.0
         else:
-            # RF mode: single silicon substrate box (legacy)
+            # RF mode: single silicon substrate box (legacy). Its depth is
+            # substrate_thickness; the PDK's own substrate layer is not used.
+            stack_substrate_zmin = min(
+                (
+                    layer.zmin
+                    for layer in stack.layers.values()
+                    if layer.layer_type == "substrate"
+                ),
+                default=None,
+            )
+            if (
+                not explicit_substrate_thickness
+                and stack_substrate_zmin is not None
+                and stack_substrate_zmin < -substrate_thickness - 1e-9
+            ):
+                logger.warning(
+                    "include_substrate=True builds a %g um silicon substrate "
+                    "(the default substrate_thickness), but the stack's "
+                    "substrate layer reaches z=%g um. The stack's substrate "
+                    "thickness is not used here; pass substrate_thickness=%g "
+                    "to mesh the full substrate.",
+                    substrate_thickness,
+                    stack_substrate_zmin,
+                    -stack_substrate_zmin,
+                )
             stack.dielectrics.append(
                 {
                     "name": "substrate",
@@ -709,6 +790,7 @@ def extract_layer_stack(
             }
         )
 
+    stack.record_omitted_substrate_layers(omitted_substrate_layers)
     stack.simulation = {
         "boundary_margin": boundary_margin,
         "air_above": air_above,

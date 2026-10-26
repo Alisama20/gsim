@@ -1617,6 +1617,9 @@ def generate_mesh(
             airbox_z_below=airbox_z_below,
             symmetry_plane=symmetry_plane,
         )
+        logger.info(
+            "  Domain z-range: %.3f to %.3f um", domain_bounds[2], domain_bounds[5]
+        )
         domain_bbox = (
             geometry.bbox[0] - margin_x,
             geometry.bbox[1] - margin_y,
