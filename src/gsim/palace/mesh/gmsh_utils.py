@@ -756,6 +756,65 @@ def assign_physical_group(
     return phys_group
 
 
+class DuplicateBoundaryElementsError(ValueError):
+    """A mesh entity belongs to more than one physical group.
+
+    gmsh writes an element once per physical group it belongs to, so the file
+    would hold the same boundary element twice, which Palace reports as
+    "A non-periodic face cannot have multiple boundary elements".
+    """
+
+
+def check_unique_group_membership(
+    dims: tuple[int, ...] = (2, 3),
+    ignore_names: tuple[str, ...] | list[str] = (),
+) -> None:
+    """Raise if a mesh entity is in two or more physical groups.
+
+    Call it on the live model just before ``gmsh.write``.
+
+    Args:
+        dims: entity dimensions to check (``(2, 3)`` for a 3D mesh, ``(1, 2)``
+            for a native 2D mesh).
+        ignore_names: names of physical groups that may reuse entities of
+            another group on purpose; they are left out of the check.
+
+    Raises:
+        DuplicateBoundaryElementsError: naming up to five of the entities and
+            their groups.
+    """
+    if not gmsh.isInitialized():
+        # unit tests that mock the mesh writer never start a gmsh session
+        return
+    ignore = set(ignore_names)
+    owners: dict[tuple[int, int], list[str]] = {}
+    for dim, pg in gmsh.model.getPhysicalGroups():
+        if dim not in dims:
+            continue
+        name = gmsh.model.getPhysicalName(dim, pg) or f"<unnamed group {pg}>"
+        if name in ignore:
+            continue
+        for tag in gmsh.model.getEntitiesForPhysicalGroup(dim, pg):
+            owners.setdefault((dim, int(tag)), []).append(name)
+
+    clashes = {key: names for key, names in owners.items() if len(names) > 1}
+    if not clashes:
+        return
+    shown = "; ".join(
+        f"{'curve' if dim == 1 else 'surface' if dim == 2 else 'volume'} {tag} "
+        f"in {names}"
+        for (dim, tag), names in sorted(clashes.items())[:5]
+    )
+    more = f" (and {len(clashes) - 5} more)" if len(clashes) > 5 else ""
+    raise DuplicateBoundaryElementsError(
+        f"{len(clashes)} mesh entities are in more than one physical group, so "
+        f"the mesh file would contain the same element twice (Palace reports "
+        f"this as 'A non-periodic face cannot have multiple boundary "
+        f"elements'): {shown}{more}. A common cause is two stack dielectrics "
+        f"that overlap in z; make them touch (zmax of one == zmin of the next)."
+    )
+
+
 def get_surface_normal(surface_tag: int) -> np.ndarray:
     """Get the normal vector of a surface.
 

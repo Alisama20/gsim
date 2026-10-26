@@ -510,6 +510,28 @@ def _generate_native_boundarymode_groups(
         else:
             layer_surfaces.pop(layer_name, None)
 
+    # Step 3: background regions that overlap in z (e.g. a slab laid over part
+    # of the oxide) must not share pieces: a piece in two domain groups writes
+    # its triangles twice, and its edges end up in several interface groups and
+    # in ``absorbing``. Mirror the 3D rule (``build_entities`` order and the
+    # first-claim loop in ``run_boolean_pipeline``): the region listed first in
+    # the stack wins the overlap, the "air" background comes last.
+    bg_names = list(
+        dict.fromkeys(n for n, _ in layer_inputs if _is_background_dielectric(n))
+    )
+    bg_names.sort(key=lambda n: n == "air")  # stable: stack order otherwise
+    claimed_bg: set[int] = set()
+    for layer_name in bg_names:
+        pieces = layer_surfaces.get(layer_name)
+        if not pieces:
+            continue
+        unique = pieces - claimed_bg
+        if unique:
+            layer_surfaces[layer_name] = unique
+            claimed_bg |= unique
+        else:
+            layer_surfaces.pop(layer_name, None)
+
     if metal_piece_tags:
         for layer_name, pieces in list(layer_surfaces.items()):
             layer = stack.layers.get(layer_name)
@@ -1537,6 +1559,18 @@ def generate_mesh(
                 problem_type=simulation_type,
             )
 
+            # No element may be written twice: a line or triangle in two physical
+            # groups gives Palace a face with several boundary elements. Contact
+            # and interface lines are named after declared layer pairs and may
+            # reuse the interface curves on purpose.
+            gmsh_utils.check_unique_group_membership(
+                dims=(1, 2),
+                ignore_names=(
+                    *groups.get("contact_lines", {}),
+                    *groups.get("interface_lines", {}),
+                ),
+            )
+
             gmsh.option.setNumber("Mesh.Binary", 0)
             gmsh.option.setNumber("Mesh.SaveAll", 0)
             gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
@@ -1832,6 +1866,10 @@ def generate_mesh(
             field_order=numerical_config.order if numerical_config else 2,
             problem_type=simulation_type,
         )
+
+        # No element may be written twice: a face in two physical groups gives
+        # Palace a face with several boundary elements.
+        gmsh_utils.check_unique_group_membership(dims=(2, 3))
 
         # Save mesh
         gmsh.option.setNumber("Mesh.Binary", 0)
