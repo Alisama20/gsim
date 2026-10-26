@@ -319,6 +319,7 @@ def generate_palace_config(
     refinement_config: RefinementConfig | None = None,
     periodic_translation: tuple[float, float, float] | None = None,
     resolved_terminals: list[ResolvedTerminal] | None = None,
+    absorbing_order: int = 2,
 ) -> Path:
     """Generate Palace config.json file.
 
@@ -334,7 +335,8 @@ def generate_palace_config(
             When provided, material dispersion is evaluated at the center
             frequency ``(fmin + fmax) / 2`` of the sweep band.
         eigenmode_config: Optional EigenmodeConfig for eigenproblems settings
-        absorbing_boundary: Whether to add absorbing (PML) boundary
+        absorbing_boundary: Whether to add an absorbing boundary on the outer walls
+        absorbing_order: Order (1 or 2) of that absorbing boundary condition
         periodic_axis: Optional periodic axis identifier
         periodic_translation: Actual donor-to-receiver translation in mesh units
         hints: Additional config hints merged into the JSON
@@ -837,7 +839,7 @@ def generate_palace_config(
         attrs = absorbing_pg if isinstance(absorbing_pg, list) else [absorbing_pg]
         boundaries["Absorbing"] = {
             "Attributes": attrs,
-            "Order": 2,
+            "Order": absorbing_order,
         }
 
     # Symmetry plane: PMC (even/common mode) or PEC (odd/differential mode).
@@ -1169,6 +1171,7 @@ def write_config(
     terminals: list[TerminalConfig] | None = None,
     refinement_config: RefinementConfig | None = None,
     resolved_terminals: list[ResolvedTerminal] | None = None,
+    absorbing_order: int = 2,
 ) -> Path:
     """Write Palace config.json from a MeshResult.
 
@@ -1182,7 +1185,8 @@ def write_config(
             When provided, material dispersion is evaluated at the center
             frequency of the sweep band.
         eigenmode_config: Optional EigenmodeConfig for eigenproblems settings
-        absorbing_boundary: Whether to add absorbing (PML) boundary
+        absorbing_boundary: Whether to add an absorbing boundary on the outer walls
+        absorbing_order: Order (1 or 2) of that absorbing boundary condition
         hints: Additional config hints merged into the JSON
         resolved_terminals: Electrostatic terminals resolved to nets, for a
             mesh with one physical group per net
@@ -1223,6 +1227,7 @@ def write_config(
         terminals=terminals,
         refinement_config=refinement_config,
         resolved_terminals=resolved_terminals,
+        absorbing_order=absorbing_order,
     )
 
     # Update the mesh_result with the config path

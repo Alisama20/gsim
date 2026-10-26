@@ -1242,6 +1242,7 @@ def generate_mesh(
     threads: int = 1,
     surface_threads: int = 1,
     split_conductors_by_net: bool = False,
+    absorbing_order: int = 2,
 ) -> MeshResult:
     """Generate mesh for Palace EM simulation.
 
@@ -1319,6 +1320,7 @@ def generate_mesh(
             group per electrical net (``<name>@<net>``) and list the nets
             in ``groups["nets"]``. Needs ``write_config=False``, since the
             config needs the terminals. Ignored for boundary mode.
+        absorbing_order: Order (1 or 2) of the absorbing boundary condition
 
     Returns:
         MeshResult with paths and metadata
@@ -1556,6 +1558,7 @@ def generate_mesh(
                     boundary_mode_config,
                     absorbing_boundary,
                     periodic_axis,
+                    absorbing_order=absorbing_order,
                     # tensors are written in the 2D mesh frame (_to_section_frame)
                     hints={"_cross_section_axis": cross_section.axis},
                 )
@@ -1858,6 +1861,7 @@ def generate_mesh(
                 absorbing_boundary,
                 periodic_axis,
                 periodic_translation=periodic_translation,
+                absorbing_order=absorbing_order,
             )
 
     finally:
