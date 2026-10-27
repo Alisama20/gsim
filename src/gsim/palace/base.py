@@ -498,25 +498,42 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
             air_above: Deprecated and ignored. Use set_airbox().
             air_below: Deprecated and ignored. Use set_airbox().
             substrate_thickness: Depth below ``z=0`` in um (2.0 when omitted).
-                Without ``include_substrate`` it is the depth of the oxide fill
-                and the bottom of the stack. With ``include_substrate`` it is
-                the thickness of the silicon substrate; a stack with shaped
-                (photonic) dielectrics keeps the PDK's own substrate depth if
-                that is deeper.
+                It only matters where something is built from it: the
+                synthetic oxide fill (``include_substrate=False`` with
+                ``add_oxide_dielectric=True``) or the silicon substrate
+                (``include_substrate=True``; a stack with shaped (photonic)
+                dielectrics keeps the PDK's own substrate depth if that is
+                deeper). With ``include_substrate=False`` and
+                ``add_oxide_dielectric=False`` nothing is built from it, it is
+                ignored, and a warning is logged if it was given.
             include_substrate: Include lossy silicon substrate (default
                 ``False``). With ``False`` the PDK's substrate layer is left
                 out of the simulation, so changing its thickness in the PDK
-                stack changes neither the mesh nor the config; the domain
-                bottom is then the oxide bottom (``-substrate_thickness``)
-                minus ``set_airbox(z_below=...)``. A warning is logged when
-                the PDK substrate and these settings disagree.
-            add_oxide_dielectric: Add synthetic oxide background dielectric.
+                stack changes neither the mesh nor the config. A warning is
+                logged when the PDK substrate and these settings disagree.
+            add_oxide_dielectric: Add the synthetic oxide background
+                dielectric (default ``True``). When the substrate is omitted
+                this is the region whose bottom is ``-substrate_thickness``.
+                With ``False`` the stack bottom comes from the PDK's own
+                dielectric regions, or from the lowest layer when there are
+                none, not from ``substrate_thickness``.
             **kwargs: Additional args passed to extract_layer_stack.
 
-        The bottom of the Palace domain is the lowest dielectric of the
-        resolved stack minus ``set_airbox(z_below=...)``. To move it, change
-        ``substrate_thickness`` (with ``include_substrate=True`` for a silicon
-        substrate), ``z_below``, or pass a custom ``LayerStack``.
+        The bottom of the Palace domain is the lowest non-air dielectric
+        region of the resolved stack (the lowest layer when there is no such
+        region) minus ``set_airbox(z_below=...)``. What sets that region:
+
+        * ``include_substrate=True``: the silicon, whose bottom is
+          ``-substrate_thickness`` (or the PDK substrate bottom, if deeper, for
+          stacks with shaped dielectrics).
+        * ``include_substrate=False`` and ``add_oxide_dielectric=True`` (the
+          default): the oxide fill, whose bottom is ``-substrate_thickness``.
+        * ``include_substrate=False`` and ``add_oxide_dielectric=False``: not
+          ``substrate_thickness``; the PDK's dielectric layers and layer
+          extents. Move the bottom with ``z_below`` or the PDK layers.
+
+        With a custom ``LayerStack`` the bottom is whatever its dielectrics
+        say.
 
         Example:
             >>> sim.set_stack(substrate_thickness=2.0)
@@ -585,8 +602,11 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
                 Defaults to ``0.0`` when omitted. The stack bottom is the
                 lowest dielectric region: the silicon substrate with
                 ``set_stack(include_substrate=True)``, otherwise the oxide
-                bottom at ``-substrate_thickness``. A substrate layer left out
-                of the stack does not move it.
+                bottom at ``-substrate_thickness``. With
+                ``add_oxide_dielectric=False`` there is no such oxide, and the
+                bottom comes from the PDK's remaining dielectric regions or
+                layer extents (``substrate_thickness`` is ignored). A
+                substrate layer left out of the stack does not move it.
             material: Background material name for the padded region
                 (default ``"air"``).
         """
@@ -624,8 +644,10 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
         With ``include_substrate=False`` (the default) the PDK's substrate layer
         is left out of the stack, so a different silicon thickness there gives
         the same mesh and config. This matters once ``set_airbox(z_below=...)``
-        is used to place the bottom boundary: it is measured from the oxide
-        bottom, not from the silicon.
+        is used to place the bottom boundary: it is measured from the stack
+        bottom, not from the silicon. That is the oxide bottom
+        (``-substrate_thickness``), or, with ``add_oxide_dielectric=False``,
+        the lowest PDK dielectric region or layer extent.
         """
         omitted = getattr(stack, "omitted_substrate_layers", None)
         z_below = (self._airbox_config or {}).get("z_below") or 0.0
@@ -634,6 +656,13 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
         from gsim.palace.mesh.geometry import _resolve_stack_z_extent
 
         z_bottom, _ = _resolve_stack_z_extent(stack, True)
+        if (stack.simulation or {}).get("add_oxide_dielectric", True):
+            move_hint = "substrate_thickness / z_below"
+        else:
+            move_hint = (
+                "z_below or the PDK dielectric layers (substrate_thickness "
+                "has no effect with add_oxide_dielectric=False)"
+            )
         layers = ", ".join(
             f"'{d['name']}' ({d['thickness']:g} um, z={d['zmin']:g} to {d['zmax']:g})"
             for d in omitted
@@ -643,11 +672,11 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
             "include_substrate=False, so its thickness does not move the domain "
             "bottom. The bottom is z=%g um (stack bottom) minus "
             "set_airbox(z_below=%g). Use set_stack(include_substrate=True) to "
-            "mesh the substrate, or set substrate_thickness / z_below to move "
-            "the bottom.",
+            "mesh the substrate, or set %s to move the bottom.",
             layers,
             z_bottom,
             z_below,
+            move_hint,
         )
 
     def _resolve_domain_margins(self, mesh_config) -> tuple[float, float]:

@@ -365,15 +365,19 @@ def extract_layer_stack(
     Args:
         gf_layer_stack: gdsfactory LayerStack object
         pdk_name: Name of the PDK (for documentation)
-        substrate_thickness: Depth below ``z=0`` (um) of the bottom of the
-            stack, default 2.0 when omitted. With ``include_substrate=False``
-            it is the depth of the oxide fill, and the PDK's substrate layer
-            is left out of the stack altogether (see ``include_substrate``).
-            With ``include_substrate=True`` it is the thickness of the
-            silicon substrate; for a stack with shaped (photonic) dielectrics
-            it can only deepen the PDK's substrate, never make it shallower.
-            A warning is logged when the value (or the 2.0 um default) and
-            the PDK's substrate layer disagree.
+        substrate_thickness: Depth below ``z=0`` (um), default 2.0 when
+            omitted. With ``include_substrate=False`` it is the depth of the
+            synthetic oxide fill (the bottom of the stack), and the PDK's
+            substrate layer is left out of the stack altogether (see
+            ``include_substrate``). That needs ``add_oxide_dielectric=True``:
+            with ``add_oxide_dielectric=False`` nothing is built from it, the
+            stack bottom comes from the PDK's dielectric layers, and a
+            warning is logged when the value was given explicitly. With
+            ``include_substrate=True`` it is the thickness of the silicon
+            substrate; for a stack with shaped (photonic) dielectrics it can
+            only deepen the PDK's substrate, never make it shallower. A
+            warning is logged when the value (or the 2.0 um default) and the
+            PDK's substrate layer disagree.
         air_above: Height of air box above top dielectric in um (default: 0.0)
         air_below: Height of air box below substrate/oxide in um (default: 0.0)
         boundary_margin: Lateral margin from GDS bbox in um (default: 30)
@@ -384,6 +388,9 @@ def extract_layer_stack(
             :attr:`LayerStack.omitted_substrate_layers`.
         add_oxide_dielectric: Add synthetic oxide background dielectric region.
             Set False to rely on dielectric regions/layers provided by the PDK.
+            The oxide fill is what carries ``substrate_thickness`` when the
+            substrate is omitted, so with ``include_substrate=False`` the
+            bottom of the stack then comes from the PDK's layers instead.
 
     Returns:
         LayerStack object for Palace simulation
@@ -790,6 +797,26 @@ def extract_layer_stack(
             }
         )
 
+    if (
+        explicit_substrate_thickness
+        and not include_substrate
+        and not add_oxide_dielectric
+        and air_below <= 0
+    ):
+        # No oxide fill and no substrate: nothing is built at -substrate_thickness.
+        logger.warning(
+            "substrate_thickness=%g um has no effect with include_substrate=False "
+            "and add_oxide_dielectric=False: there is no oxide fill or substrate "
+            "to place at z=%g um. The stack bottom comes from the PDK's "
+            "dielectric layers (lowest at z=%g um), plus set_airbox(z_below=...). "
+            "Move it with z_below or the PDK layers, or use "
+            "add_oxide_dielectric=True / include_substrate=True so that "
+            "substrate_thickness is used.",
+            substrate_thickness,
+            -substrate_thickness,
+            _stack_bottom(stack),
+        )
+
     stack.record_omitted_substrate_layers(omitted_substrate_layers)
     stack.simulation = {
         "boundary_margin": boundary_margin,
@@ -801,6 +828,23 @@ def extract_layer_stack(
     }
 
     return stack
+
+
+def _stack_bottom(stack: LayerStack) -> float:
+    """Lowest non-air dielectric z of *stack*, else the lowest layer z (um).
+
+    Mirrors how the Palace mesh resolves the bottom of the domain (before the
+    airbox ``z_below`` is added).
+    """
+    zs = [
+        float(d["zmin"])
+        for d in stack.dielectrics
+        if str(d.get("material", "")).lower() != "air"
+        and float(d["zmax"]) > float(d["zmin"])
+    ]
+    if not zs:
+        zs = [layer.zmin for layer in stack.layers.values()]
+    return min(zs) if zs else 0.0
 
 
 _OXIDE_NAMES = {"sio2", "oxide", "box", "buried_oxide", "si3n4", "nitride"}
