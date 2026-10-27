@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import gmsh
 import numpy as np
@@ -21,6 +21,7 @@ from gsim.palace.mesh.metadata import (
     write_metadata,
 )
 from gsim.palace.mesh.quality import tetrahedron_distortion
+from gsim.palace.models.solver import _ESTIMATOR_KEYS
 from gsim.palace.ports.config import PortType
 from gsim.palace.ports.modes import (
     PORT_MODES_FILENAME,
@@ -32,7 +33,7 @@ from gsim.palace.ports.modes import (
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from gsim.common.stack import LayerStack
     from gsim.palace.models import (
@@ -372,6 +373,35 @@ def _multimode_entries(
     return sorted([*rows, *extras], key=lambda row: row.index)
 
 
+# Without AMR nothing reads the indicator precisely, so a loose tolerance is
+# enough. With AMR it drives refinement, so Palace's defaults apply.
+_ESTIMATOR_DEFAULTS_AMR_OFF: Mapping[str, float | int | bool] = {"EstimatorTol": 1e-2}
+_ESTIMATOR_DEFAULTS_AMR_ON: Mapping[str, float | int | bool] = {}
+
+
+def _resolve_estimator_settings(
+    linear: dict[str, Any], refinement: RefinementConfig
+) -> None:
+    """Fill unset error estimator keys in ``linear`` by AMR state, in place.
+
+    Explicit values win key by key. All estimator keys are re-appended in
+    Palace's read order so the written bytes do not depend on which were set.
+    """
+    amr_on = refinement.max_its > 0
+    defaults = _ESTIMATOR_DEFAULTS_AMR_ON if amr_on else _ESTIMATOR_DEFAULTS_AMR_OFF
+    for key in _ESTIMATOR_KEYS:
+        value = linear.pop(key, defaults.get(key))
+        if value is not None:
+            linear[key] = value
+    if amr_on and linear.get("EstimatorMaxIts") == 0:
+        logger.warning(
+            "estimator_max_iterations=0 with AMR on (refinement max_its=%d): "
+            "Palace's error indicator is not computed, so refinement follows "
+            "field energy instead of error and will not stop at refinement tol.",
+            refinement.max_its,
+        )
+
+
 def generate_palace_config(
     groups: dict,
     ports: list[PalacePort],
@@ -393,6 +423,7 @@ def generate_palace_config(
     refinement_config: RefinementConfig | None = None,
     periodic_translation: tuple[float, float, float] | None = None,
     resolved_terminals: list[ResolvedTerminal] | None = None,
+    absorbing_order: int = 2,
 ) -> Path:
     """Generate Palace config.json file.
 
@@ -408,7 +439,8 @@ def generate_palace_config(
             When provided, material dispersion is evaluated at the center
             frequency ``(fmin + fmax) / 2`` of the sweep band.
         eigenmode_config: Optional EigenmodeConfig for eigenproblems settings
-        absorbing_boundary: Whether to add absorbing (PML) boundary
+        absorbing_boundary: Whether to add an absorbing boundary on the outer walls
+        absorbing_order: Order (1 or 2) of that absorbing boundary condition
         periodic_axis: Optional periodic axis identifier
         periodic_translation: Actual donor-to-receiver translation in mesh units
         hints: Additional config hints merged into the JSON
@@ -497,6 +529,9 @@ def generate_palace_config(
             else SolverConfig()
         )
         solver_conf = defaults.to_solver_config()
+    _resolve_estimator_settings(
+        cast("dict[str, Any]", solver_conf["Linear"]), refinement_config
+    )
 
     if simulation_type == "driven":
         solver_conf["Driven"] = solver_driven
@@ -918,7 +953,7 @@ def generate_palace_config(
         attrs = absorbing_pg if isinstance(absorbing_pg, list) else [absorbing_pg]
         boundaries["Absorbing"] = {
             "Attributes": attrs,
-            "Order": 2,
+            "Order": absorbing_order,
         }
 
     # Symmetry plane: PMC (even/common mode) or PEC (odd/differential mode).
@@ -1258,6 +1293,7 @@ def write_config(
     terminals: list[TerminalConfig] | None = None,
     refinement_config: RefinementConfig | None = None,
     resolved_terminals: list[ResolvedTerminal] | None = None,
+    absorbing_order: int = 2,
 ) -> Path:
     """Write Palace config.json from a MeshResult.
 
@@ -1271,7 +1307,8 @@ def write_config(
             When provided, material dispersion is evaluated at the center
             frequency of the sweep band.
         eigenmode_config: Optional EigenmodeConfig for eigenproblems settings
-        absorbing_boundary: Whether to add absorbing (PML) boundary
+        absorbing_boundary: Whether to add an absorbing boundary on the outer walls
+        absorbing_order: Order (1 or 2) of that absorbing boundary condition
         hints: Additional config hints merged into the JSON
         resolved_terminals: Electrostatic terminals resolved to nets, for a
             mesh with one physical group per net
@@ -1312,6 +1349,7 @@ def write_config(
         terminals=terminals,
         refinement_config=refinement_config,
         resolved_terminals=resolved_terminals,
+        absorbing_order=absorbing_order,
     )
 
     # Update the mesh_result with the config path
