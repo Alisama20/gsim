@@ -417,8 +417,12 @@ def _generate_native_boundarymode_groups(
 
     outer_parts = {tag for dim, tag in out_map[0] if dim == 2}
     layer_surfaces: dict[str, set[int]] = {}
+    # Pieces of each input rectangle, kept per entry (same order as
+    # ``layer_inputs``): ``layer_surfaces`` merges entries of one material.
+    entry_pieces: list[set[int]] = []
     for idx, (layer_name, _tag) in enumerate(layer_inputs, start=1):
         pieces = {tag for dim, tag in out_map[idx] if dim == 2}
+        entry_pieces.append(pieces)
         if pieces:
             layer_surfaces.setdefault(layer_name, set()).update(pieces)
 
@@ -516,21 +520,30 @@ def _generate_native_boundarymode_groups(
     # in ``absorbing``. Mirror the 3D rule (``build_entities`` order and the
     # first-claim loop in ``run_boolean_pipeline``): the region listed first in
     # the stack wins the overlap, the "air" background comes last.
-    bg_names = list(
-        dict.fromkeys(n for n, _ in layer_inputs if _is_background_dielectric(n))
-    )
-    bg_names.sort(key=lambda n: n == "air")  # stable: stack order otherwise
+    #
+    # The claim runs per stack region, not per material: ``layer_inputs`` holds
+    # material names, and two regions of one material (an SiO2 box and an SiO2
+    # cladding) with another material listed between them must not be merged
+    # first, or the merged group would take an overlap that belongs to the
+    # region in between. Regions are merged into material groups afterwards.
+    bg_entries = [
+        (bg_name, entry_pieces[idx])
+        for idx, (bg_name, _tag) in enumerate(layer_inputs)
+        if _is_background_dielectric(bg_name)
+    ]
+    bg_entries.sort(key=lambda entry: entry[0] == "air")  # stable: stack order
     claimed_bg: set[int] = set()
-    for layer_name in bg_names:
-        pieces = layer_surfaces.get(layer_name)
-        if not pieces:
-            continue
-        unique = pieces - claimed_bg
-        if unique:
-            layer_surfaces[layer_name] = unique
-            claimed_bg |= unique
+    bg_owned: dict[str, set[int]] = {}
+    for bg_name, region_pieces in bg_entries:
+        # ``layer_surfaces`` already lost the patterned-dielectric pieces
+        unique = (region_pieces & layer_surfaces.get(bg_name, set())) - claimed_bg
+        claimed_bg |= unique
+        bg_owned.setdefault(bg_name, set()).update(unique)
+    for bg_name, owned in bg_owned.items():
+        if owned:
+            layer_surfaces[bg_name] = owned
         else:
-            layer_surfaces.pop(layer_name, None)
+            layer_surfaces.pop(bg_name, None)
 
     if metal_piece_tags:
         for layer_name, pieces in list(layer_surfaces.items()):

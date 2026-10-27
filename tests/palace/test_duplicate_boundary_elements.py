@@ -6,6 +6,8 @@ one face give Palace a face with several boundary elements, and it stops with
 
 * Native 2D BoundaryMode: two background dielectrics that overlap in z both
   claimed the overlap (fixed: the region listed first in the stack owns it).
+  The claim is made per stack region: two regions of one material (an SiO2 box
+  and an SiO2 cladding) are not merged before it, whatever is listed between.
 * Every mesh is checked before it is written (``DuplicateBoundaryElementsError``).
 * The 3D configurations with an air or gas slab at the airbox top never
   duplicated anything on main; they are kept here as a guard.
@@ -28,6 +30,7 @@ from gsim.palace.mesh import generator, gmsh_utils
 from tests._electrode_layouts import FULL, MESH, component, stack
 
 GAS = {"type": "dielectric", "permittivity": 1.0001}
+POLYMER = {"type": "dielectric", "permittivity": 2.5}
 AIR = {"type": "dielectric", "permittivity": 1.0}
 SIGNAL = ("m1", -20, 0, 20, 4)
 GROUND = ("m1", -20, 8, 20, 12)
@@ -161,6 +164,103 @@ def test_native_2d_overlapping_dielectrics_have_one_owner(tmp_path, case):
         assert ranges[name] == pytest.approx(vertical, abs=1e-6), ranges
 
 
+# ------------------------------------------- native 2D: one material, two regions
+def _mesh_regions(tmp_path: Path, regions: list[tuple]) -> Path:
+    """Mesh a generic BoundaryMode cross-section with ``(name, z0, z1, material)``."""
+    gf.gpdk.PDK.activate()
+    st = stack()
+    st.dielectrics = [
+        {"name": name, "zmin": z0, "zmax": z1, "material": material}
+        for name, z0, z1, material in regions
+    ]
+    st.materials["polymer"] = POLYMER
+    sim = BoundaryModeSim()
+    sim.set_output_dir(str(tmp_path))
+    sim.set_geometry(component([SIGNAL, GROUND], ports=[]))
+    sim.set_stack(st)
+    sim.set_airbox(margin_x=0.0, margin_y=5.0, z_above=0.0, z_below=2.0)
+    sim.set_cross_section("x=0")
+    sim.set_boundary_mode(freq=10e9, num_modes=2, save=0)
+    sim.metallic_boundaries = True
+    sim.mesh(preset="coarse", verbose=False, **MESH)
+    return sim.mesh_path
+
+
+def _triangles_in_band(msh_path: Path, z0: float, z1: float) -> dict[str, int]:
+    """Triangles per domain group whose centroid height lies between z0 and z1."""
+    names, xyz, elements = _read_msh(msh_path)
+    counts: dict[str, int] = defaultdict(int)
+    for etype, phys, nodes in elements:
+        if etype == TRIANGLE:
+            height = sum(xyz[n][1] for n in nodes) / len(nodes)
+            if z0 < height < z1:
+                counts[names[(2, phys)]] += 1
+    return dict(counts)
+
+
+OXIDE = ("box", -2.0, 4.0, "sio2")
+MID = ("mid", 4.0, 8.0, "polymer")
+CLAD = ("clad", 6.0, 10.0, "sio2")
+INNER = ("inner", 2.0, 3.0, "polymer")
+WIDE_BOX = ("box", -2.0, 5.0, "sio2")
+
+# (regions in stack order, band, group that must own the band)
+SAME_MATERIAL_TWICE = {
+    "polymer listed between the SiO2 box and the SiO2 cladding": (
+        [OXIDE, MID, CLAD],
+        (6.0, 8.0),
+        "polymer",
+    ),
+    "polymer listed after the SiO2 cladding": (
+        [OXIDE, CLAD, MID],
+        (6.0, 8.0),
+        "sio2",
+    ),
+    "polymer inside the oxide, listed first": (
+        [INNER, WIDE_BOX],
+        (2.0, 3.0),
+        "polymer",
+    ),
+    "polymer inside the oxide, listed after it": (
+        [WIDE_BOX, INNER],
+        (2.0, 3.0),
+        "sio2",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(SAME_MATERIAL_TWICE))
+def test_native_2d_regions_of_one_material_are_claimed_one_by_one(tmp_path, case):
+    """The first region listed owns an overlap, also against a merged material.
+
+    On the branch before this fix the two SiO2 regions were merged into one entry
+    before the claim, which then sat at the place of the box in the order: the
+    cladding took the overlap from a polymer region listed before it (224
+    triangles in the first case, polymer got none) with no element written twice,
+    so the group check could not see it.
+    """
+    regions, (z0, z1), owner = SAME_MATERIAL_TWICE[case]
+    msh = _mesh_regions(tmp_path, regions)
+
+    assert _duplicates(msh, TRIANGLE) == {}
+    assert _duplicates(msh, LINE) == {}
+    in_band = _triangles_in_band(msh, z0, z1)
+    in_band.pop("air", None)  # beside the stack, not in it
+    assert set(in_band) == {owner}, in_band
+    assert in_band[owner] > 0
+
+
+def test_native_2d_region_fully_covered_by_an_earlier_one_has_no_group(tmp_path):
+    """A region listed after one that covers it entirely gets no domain group."""
+    msh = _mesh_regions(tmp_path, [WIDE_BOX, INNER])
+
+    names, _, _ = _read_msh(msh)
+    domain_groups = {name for (dim, _), name in names.items() if dim == 2}
+    assert "sio2" in domain_groups
+    assert "polymer" not in domain_groups
+    assert _duplicates(msh, TRIANGLE) == {}
+
+
 # --------------------------------------------------------------------- the guard
 def _cubes(kernel) -> tuple[int, list[int]]:
     """A big box with a unit cube inside it, fragmented: 2 volumes."""
@@ -245,6 +345,18 @@ def test_guard_lists_at_most_five_entities(kernel):
         gmsh_utils.check_unique_group_membership(dims=(2,))
     assert "(and 2 more)" in str(info.value)
     assert str(info.value).count("surface ") == 5
+
+
+def test_guard_names_a_group_that_has_no_name(kernel):
+    """A physical group without a name is reported by its tag."""
+    face, _volumes = _cubes(kernel)
+    gmsh.model.addPhysicalGroup(2, [face], tag=7)
+    gmsh.model.addPhysicalGroup(2, [face], tag=8, name="port_P1")
+
+    with pytest.raises(
+        gmsh_utils.DuplicateBoundaryElementsError, match="<unnamed group 7>"
+    ):
+        gmsh_utils.check_unique_group_membership(dims=(2,))
 
 
 def test_meshing_runs_the_guard_before_writing(tmp_path, monkeypatch):
