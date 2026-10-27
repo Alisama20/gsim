@@ -100,11 +100,19 @@ def get_stack(
     Args:
         yaml_path: Path to custom YAML stack file. If None, uses active PDK.
         **kwargs: Additional args passed to the stack builder:
-            - substrate_thickness: Thickness below z=0 in um (default: 2.0)
+            - substrate_thickness: Depth below z=0 in um (default: 2.0). The
+              depth of the oxide fill when the substrate is omitted, the
+              silicon thickness when ``include_substrate=True``. Ignored (with
+              a warning if given) when ``include_substrate=False`` and
+              ``add_oxide_dielectric=False``: the stack bottom then comes from
+              the PDK's dielectric layers.
             - include_substrate: Include lossy silicon substrate (default: False).
-              When False, omits substrate for RF simulation.
+              When False, omits substrate for RF simulation: the PDK's
+              substrate layer, and its thickness, do not enter the stack
+              (see ``LayerStack.omitted_substrate_layers``).
             - add_oxide_dielectric: Add synthetic oxide dielectric background
-              region (default: True).
+              region (default: True). It is the region that carries
+              ``substrate_thickness`` when the substrate is omitted.
 
     Returns:
         LayerStack object
