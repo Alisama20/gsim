@@ -282,6 +282,8 @@ def run_boolean_pipeline(entities: list[Entity]) -> dict[str, int]:
     for stag, names in surf_to_names.items():
         if stag in assigned_surfs:
             continue
+        if len(names) == 1 and len(gmsh.model.getAdjacencies(2, stag)[0]) > 1:
+            continue
         label = "__".join(sorted(names)) if len(names) > 1 else f"{names[0]}__None"
         name_combo_to_surfs.setdefault(label, []).append(stag)
 
