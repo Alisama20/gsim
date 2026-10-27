@@ -12,7 +12,8 @@ sections below cover the transformation (1 to 3), what Palace allows on one port
 come from (5), how the 2D modes are matched to Palace's port modes (6), the choice of conductors (7), the whole workflow
 (8), network helpers (9), limits (10), a synthetic example (11) and the validation geometries (12). The notebook
 [Terminal wave ports in Palace](nbs/palace_terminal_waveport.md) runs the local part of the workflow and holds the cloud
-cells.
+cells. [Coupled lines with terminal wave ports](nbs/palace_terminal_waveport_gssg.md) runs it end to end on a
+coupled GSSG line and checks the result against a uniform line built from the 2D port solve.
 
 ## 1. Why modal S is not terminal S
 
