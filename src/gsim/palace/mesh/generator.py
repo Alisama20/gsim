@@ -801,8 +801,12 @@ def _generate_native_boundarymode_groups(
             list(interface_specs or []), kind="Interface", key="interface_lines"
         )
 
+    # Only the meshed regions can carry the outer boundary. A conductor is a
+    # hole in the 2D mesh: the piece of the domain wall it covers is not an
+    # edge of any triangle, and a boundary element that is no edge of a
+    # triangle makes Palace crash (MFEM's GetBdrElementFace reads face -1).
     outer_curves: set[int] = set()
-    for stag in outer_parts:
+    for stag in sorted(outer_parts & vol_pg_surfaces):
         try:
             boundaries = gmsh.model.getBoundary(
                 [(2, stag)],
