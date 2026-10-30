@@ -1,0 +1,117 @@
+{
+    "Problem": {
+        "Type": "BoundaryMode",
+        "Verbose": 3,
+        "Output": "output/palace"
+    },
+    "Model": {
+        "Mesh": "palace.msh",
+        "L0": 1e-06,
+        "Refinement": {
+            "UniformLevels": 0,
+            "Tol": 0.01,
+            "MaxIts": 0
+        }
+    },
+    "Solver": {
+        "Linear": {
+            "Type": "MUMPS",
+            "KSPType": "GMRES",
+            "Tol": 1e-06,
+            "MaxIts": 400,
+            "MGMaxLevels": 100,
+            "PCMatReal": false,
+            "ComplexCoarseSolve": true,
+            "EstimatorTol": 0.01
+        },
+        "Order": 2,
+        "Device": "CPU",
+        "BoundaryMode": {
+            "Freq": 10.0,
+            "N": 4,
+            "Save": 0,
+            "Tol": 1e-08,
+            "Type": "Default",
+            "Target": 2.3
+        }
+    },
+    "Domains": {
+        "Materials": [
+            {
+                "Attributes": [
+                    1
+                ],
+                "Permittivity": 3.9,
+                "LossTan": 0.0
+            },
+            {
+                "Attributes": [
+                    2
+                ],
+                "Permittivity": 11.9,
+                "Conductivity": 0.13333333333333333
+            },
+            {
+                "Attributes": [
+                    3
+                ],
+                "Permittivity": 3.9,
+                "LossTan": 0.0
+            },
+            {
+                "Attributes": [
+                    4
+                ],
+                "Permittivity": 1.0,
+                "LossTan": 0.0
+            }
+        ],
+        "Postprocessing": {
+            "Energy": [],
+            "Probe": []
+        }
+    },
+    "Boundaries": {
+        "PEC": {
+            "Attributes": [
+                5,
+                6,
+                10
+            ]
+        },
+        "Postprocessing": {
+            "Impedance": [
+                {
+                    "Index": 1,
+                    "VoltagePath": [
+                        [
+                            2.498,
+                            2.5
+                        ],
+                        [
+                            -2.498,
+                            2.5
+                        ]
+                    ],
+                    "NSamples": 200
+                }
+            ],
+            "Voltage": [
+                {
+                    "Index": 1,
+                    "VoltagePath": [
+                        [
+                            2.498,
+                            2.5
+                        ],
+                        [
+                            -2.498,
+                            2.5
+                        ]
+                    ],
+                    "NSamples": 200
+                }
+            ]
+        }
+    }
+}
