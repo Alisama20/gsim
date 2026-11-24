@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        seed: ["2179762284", "1753024304"]
+        seed: ["1753024304"]
     steps:
     - uses: actions/checkout@v6
     - name: Install system dependencies
@@ -24,10 +24,11 @@ jobs:
       env:
         PYTHONPATH: .github/debug
         FLAKY_PROBE_LOG: flaky_probe.log
-      run: uv run pytest -p flaky_probe -p randomly --randomly-seed=${{ matrix.seed }} --tb=short -q || true
+      run: uv run pytest -p flaky_probe -p randomly --randomly-seed=${{ matrix.seed }} --tb=short -v -p no:cacheprovider > pytest_order.txt 2>&1 || true
     - uses: actions/upload-artifact@v4
       with:
         name: probe-${{ matrix.seed }}
         path: |
           flaky_probe.log
           packages.txt
+          pytest_order.txt
