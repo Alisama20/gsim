@@ -1,0 +1,33 @@
+name: Debug flaky physical_layers
+on:
+  push:
+    branches:
+    - debug/flaky-physical-layers
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: ["2179762284", "1753024304"]
+    steps:
+    - uses: actions/checkout@v6
+    - name: Install system dependencies
+      run: bash .github/scripts/install-system-deps.sh libglu1-mesa libegl1 libgl1 libxrender1 libxcursor1 libxft2 libxinerama1
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+    - name: Create environment
+      run: uv sync --dev --all-extras
+    - name: Package list
+      run: uv pip list > packages.txt
+    - name: Run tests with the CI seed and the probe
+      env:
+        PYTHONPATH: .github/debug
+        FLAKY_PROBE_LOG: flaky_probe.log
+      run: uv run pytest -p flaky_probe -p randomly --randomly-seed=${{ matrix.seed }} --tb=short -q || true
+    - uses: actions/upload-artifact@v4
+      with:
+        name: probe-${{ matrix.seed }}
+        path: |
+          flaky_probe.log
+          packages.txt
