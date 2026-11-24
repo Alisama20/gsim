@@ -1679,3 +1679,12 @@ tests/common/test_twmzm.py::TestSegmentedEOResponse::test_the_normalization_does
 tests/common/test_twmzm.py::TestSegmentedEOResponse::test_the_drive_acts_over_the_loaded_fraction_only
 tests/common/test_twmzm.py::TestMZMTransfer::test_the_static_phase_offset_moves_the_rest_point
 tests/common/test_twmzm.py::TestMZMTransfer::test_the_transfer_is_not_extrapolated_past_the_sweep
+tests/common/test_twmzm.py::TestMZMTransfer::test_an_arm_imbalance_fills_in_the_null
+tests/common/test_twmzm.py::TestMZMTransfer::test_lossless_balanced_arms_give_a_raised_cosine[push-pull]
+tests/common/test_twmzm.py::TestMZMTransfer::test_rejects_bad_inputs
+tests/common/test_twmzm.py::TestMZMTransfer::test_a_push_pull_bias_on_the_end_of_the_sweep_is_refused
+tests/common/test_twmzm.py::TestMZMTransfer::test_the_drive_voltage_is_the_voltage_between_the_arms
+tests/common/test_twmzm.py::TestMZMTransfer::test_lossless_balanced_arms_give_a_raised_cosine[single-drive]
+tests/fdtd/test_monitor_names.py::test_xy_false_ignores_name_without_deprecation_warning
+tests/fdtd/test_monitor_names.py::test_result_alias_loads_saved_files_without_duplicate_monitors[field_xy]
+tests/fdtd/test_monitor_names.py::test_field_alias_collision_does_not_add_diagnostic_planes[field_xy]
