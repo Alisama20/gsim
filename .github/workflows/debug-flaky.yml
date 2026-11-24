@@ -3,33 +3,37 @@ on:
   push:
     branches:
     - debug/flaky-physical-layers
-  workflow_dispatch:
 jobs:
-  probe:
+  list:
+    runs-on: ubuntu-latest
+    outputs:
+      chunks: ${{ steps.c.outputs.chunks }}
+    steps:
+    - uses: actions/checkout@v6
+    - id: c
+      run: echo "chunks=$(ls .github/debug/chunks | sed 's/\.txt$//' | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+  bisect:
+    needs: list
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        seed: ["1753024304"]
+        chunk: ${{ fromJson(needs.list.outputs.chunks) }}
     steps:
     - uses: actions/checkout@v6
     - name: Install system dependencies
       run: bash .github/scripts/install-system-deps.sh libglu1-mesa libegl1 libgl1 libxrender1 libxcursor1 libxft2 libxinerama1
     - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-    - name: Create environment
-      run: uv sync --dev --all-extras
-    - name: Package list
-      run: uv pip list > packages.txt
-    - name: Run tests with the CI seed and the probe
-      env:
-        PYTHONPATH: .github/debug
-        FLAKY_PROBE_LOG: flaky_probe.log
-      run: uv run pytest -p flaky_probe -p randomly --randomly-seed=${{ matrix.seed }} --tb=short -q -p no:cacheprovider > pytest_order.txt 2>&1 || true
+    - run: uv sync --dev --all-extras
+    - name: Run chunk then victims in order
+      run: |
+        V=tests/meep/test_physical_layers.py
+        uv run pytest -p no:randomly -p no:cacheprovider -q --tb=line @.github/debug/chunks/${{ matrix.chunk }}.txt $V::test_real_shallow_etch_stays_separate_from_direct_slab $V::test_direct_slab_does_not_create_shallow_etch $V::test_build_config_and_xz_geometry_omit_false_shallow_etch > out.txt 2>&1 || true
+        if grep -q "FAILED tests/meep/test_physical_layers" out.txt; then echo FAIL > result.txt; else echo PASS > result.txt; fi
+        tail -3 out.txt
     - uses: actions/upload-artifact@v4
       with:
-        name: probe-${{ matrix.seed }}
+        name: r-${{ matrix.chunk }}
         path: |
-          flaky_probe.log
-          packages.txt
-          pytest_order.txt
-          test_order.txt
+          result.txt
+          out.txt
