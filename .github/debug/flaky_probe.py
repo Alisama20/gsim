@@ -73,6 +73,9 @@ def pytest_runtest_setup(item):
 
 
 def pytest_runtest_teardown(item, nextitem):  # noqa: ARG001
+    with open("test_order.txt", "a", encoding="utf-8") as f:
+        f.write(item.nodeid + "
+")
     name = _pdk_name()
     if name != _last["pdk"]:
         _write(json.dumps({"tag": "pdk_change_after", "test": item.nodeid, "pdk": name}))
