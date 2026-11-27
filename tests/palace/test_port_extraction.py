@@ -26,7 +26,9 @@ def test_simulation_port_configuration_roundtrip(port_stack, geometry):
         sim.add_two_terminal_port("plus", "minus", layer="m1", excited=True)
         assert len(sim.two_terminal_ports) == 1
     sim._configure_ports_on_component(port_stack)
-    (port,) = extract_ports(component, port_stack)
+    # The simulation keeps the settings in its own table, not on the component
+    assert all(not p.info.get("palace_type") for p in component.ports)
+    (port,) = extract_ports(component, port_stack, sim._port_info)
     assert port.excited
     assert port.geometry == (
         PortGeometry.GAP if geometry == "gap" else PortGeometry.EDGE

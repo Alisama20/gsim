@@ -13,6 +13,38 @@ from gdsfactory.technology import LayerLevel
 logger = logging.getLogger(__name__)
 
 
+def _tuple_from_layer_string(layer: str) -> tuple[int, int] | None:
+    """Resolve a layer written as ``"layer/datatype"`` or as a layer name.
+
+    gdsf layer levels refer to their layer by name (``LogicalLayer.layer`` is
+    ``"M3"``), not by a GDS pair, so a name is looked up through the active
+    PDK's layer map. Returns ``None`` when the string is neither form.
+    """
+    if "/" in layer:
+        parts = layer.split("/")
+        try:
+            return (int(parts[0]), int(parts[1]))
+        except (ValueError, IndexError):
+            return None
+    try:
+        import gdsfactory as gf
+
+        pair = tuple(gf.get_layer_tuple(layer))
+    except Exception:  # noqa: BLE001 - unknown name, no active PDK, API differences
+        return None
+    if len(pair) == 2 and all(isinstance(v, int) for v in pair):
+        return (int(pair[0]), int(pair[1]))
+    return None
+
+
+def _layer_name(layer: Any) -> str | None:
+    """Return the layer name held by *layer* (a str or ``.layer`` str), if any."""
+    if isinstance(layer, str):
+        return layer
+    inner = getattr(layer, "layer", None)
+    return inner if isinstance(inner, str) else None
+
+
 def _tuple_from_layer_expression(layer: Any) -> tuple[int, int] | None:
     """Recursively extract a concrete ``(layer, datatype)`` from an expression.
 
@@ -21,6 +53,9 @@ def _tuple_from_layer_expression(layer: Any) -> tuple[int, int] | None:
     concrete leaf so metadata (drawn flags, source matching) remains stable even
     when the boolean expression itself has no single GDS tuple.
     """
+    if isinstance(layer, str):
+        return _tuple_from_layer_string(layer)
+
     if isinstance(layer, tuple) and len(layer) == 2:
         return (int(layer[0]), int(layer[1]))
 
@@ -51,9 +86,6 @@ def _tuple_from_layer_expression(layer: Any) -> tuple[int, int] | None:
     if value is not None and value is not layer:
         return _tuple_from_layer_expression(value)
 
-    if isinstance(layer, str) and "/" in layer:
-        parts = layer.split("/")
-        return (int(parts[0]), int(parts[1]))
     return None
 
 
@@ -75,6 +107,12 @@ def get_gds_layer_tuple(layer_level: LayerLevel) -> tuple[int, int] | None:
     if isinstance(layer, int):
         return (int(layer), 0)
 
+    name = _layer_name(layer)
+    if name is not None:
+        named = _tuple_from_layer_string(name)
+        if named is not None:
+            return named
+
     if hasattr(layer, "layer"):
         inner = layer.layer
         if isinstance(inner, tuple) and len(inner) == 2:
@@ -85,7 +123,8 @@ def get_gds_layer_tuple(layer_level: LayerLevel) -> tuple[int, int] | None:
         # though ``int(enum)`` returns an unrelated map index (e.g. Cornerstone
         # WG is enum value 5 but GDS (3, 0)).
         try:
-            pair = tuple(inner)
+            # A str would iterate into its characters ("M3" -> ("M", "3")).
+            pair = None if isinstance(inner, str) else tuple(inner)
         except TypeError:
             pair = None
         if pair is not None and len(pair) == 2:
@@ -135,6 +174,25 @@ def get_gds_layer_tuple(layer_level: LayerLevel) -> tuple[int, int] | None:
 
     logger.warning("Could not parse layer %s", layer)
     return None
+
+
+def level_width_to_z(level: Any) -> float:
+    """Return ``LayerLevel.width_to_z``, ``0.0`` when the level has no such field.
+
+    gdsfactory's ``LayerLevel`` always has it. gdsf's builtin ``LayerLevel``
+    accepts ``width_to_z`` in its constructor but has no getter for it.
+    """
+    return float(getattr(level, "width_to_z", 0.0) or 0.0)
+
+
+def level_bias(level: Any) -> Any:
+    """Return ``LayerLevel.bias``, ``None`` when the level has no such field."""
+    return getattr(level, "bias", None)
+
+
+def level_z_to_bias(level: Any) -> Any:
+    """Return ``LayerLevel.z_to_bias``, ``None`` when the level has no such field."""
+    return getattr(level, "z_to_bias", None)
 
 
 def classify_layer_type(

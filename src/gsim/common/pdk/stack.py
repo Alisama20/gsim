@@ -317,7 +317,8 @@ def resolve_layer_stack(
     pdk_name = str(getattr(pdk_object, "name", "unknown"))
 
     overrides = dict(role_overrides or {})
-    unknown = set(overrides) - set(layer_stack.layers)
+    # ``.keys()``: gdsf's layer map does not support plain iteration.
+    unknown = set(overrides) - set(layer_stack.layers.keys())
     if unknown:
         raise LayerResolutionError(
             f"role_overrides reference unknown layer(s): {sorted(unknown)}."

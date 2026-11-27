@@ -5,6 +5,12 @@ from __future__ import annotations
 from math import radians, tan
 from typing import Any
 
+from gsim.common.stack._layer_utils import (
+    level_bias,
+    level_width_to_z,
+    level_z_to_bias,
+)
+
 TOLERANCE_UM = 1e-9
 
 
@@ -30,11 +36,12 @@ def material_clipping_axes(
     xmin, ymin, xmax, ymax = geometry.bounds
     if (
         (x_bounds is not None or y_bounds is not None)
-        and level.bias in (None, 0, 0.0)
-        and level.z_to_bias is None
+        and level_bias(level) in (None, 0, 0.0)
+        and level_z_to_bias(level) is None
     ):
         slope = tan(radians(float(level.sidewall_angle))) * abs(float(level.thickness))
-        offset = max(0, level.width_to_z * slope, (level.width_to_z - 1) * slope)
+        width_to_z = level_width_to_z(level)
+        offset = max(0, width_to_z * slope, (width_to_z - 1) * slope)
         if offset:
             xmin, ymin, xmax, ymax = geometry.buffer(offset, join_style=2).bounds
     z_start = float(level.zmin)

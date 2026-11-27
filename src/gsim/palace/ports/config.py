@@ -9,7 +9,7 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from gsim.palace.ports.modes import check_wave_port_modes
 
@@ -113,15 +113,37 @@ class PalacePort:
         return "-y"  # South
 
 
-def _shift_port_center(port, offset: float) -> None:
+PortStore = dict[str, dict[str, Any]]
+"""Port settings by port name: what ``configure_*_port(..., store=...)`` writes."""
+
+
+def _settings(port, store: PortStore | None):
+    """The mapping that receives a port's Palace settings.
+
+    Without a *store* it is ``port.info``, so the settings travel with the
+    component port. With a *store* it is ``store[port.name]``, which leaves
+    the port alone. Use a store where ``port.info`` cannot be written back,
+    for example when a port is a value that builds ``info`` on every read.
+    """
+    if store is None:
+        return port.info
+    return store.setdefault(port.name, {})
+
+
+def _shift_port_center(port, offset: float, store: PortStore | None = None) -> None:
     """Shift a port's center inward along its orientation by `offset` um.
 
     Positive offset moves the port away from the domain boundary and into
     the conductor (same convention as configure_cpw_port).
 
     Args:
-        port: gdsfactory Port whose center will be mutated in-place.
+        port: gdsfactory Port. Its center is mutated in-place, unless a
+            *store* is given.
         offset: Distance in um. Positive = inward (against the outward normal).
+        store: Port settings table. The shifted center is recorded there as
+            ``palace_center`` (measured from the port's own, unshifted center, so
+            repeating the call does not shift twice) and ``port`` is not
+            modified.
     """
     import numpy as np
 
@@ -133,7 +155,19 @@ def _shift_port_center(port, offset: float) -> None:
     shifted = (
         np.array([float(port.center[0]), float(port.center[1])]) - longitudinal * offset
     )
-    port.center = (float(shifted[0]), float(shifted[1]))
+    center = (float(shifted[0]), float(shifted[1]))
+    if store is None:
+        port.center = center
+    else:
+        _settings(port, store)["palace_center"] = center
+
+
+def _apply_offset(port, offset: float, store: PortStore | None) -> None:
+    """Shift the port by *offset*; with a store and no offset, drop an old shift."""
+    if offset != 0.0:
+        _shift_port_center(port, offset, store)
+    elif store is not None:
+        store.get(port.name, {}).pop("palace_center", None)
 
 
 def configure_inplane_port(
@@ -143,6 +177,8 @@ def configure_inplane_port(
     impedance: float = 50.0,
     excited: bool = True,
     offset: float = 0.0,
+    *,
+    store: PortStore | None = None,
 ):
     """Configure gdsfactory port(s) as inplane (lumped) ports for Palace simulation.
 
@@ -157,6 +193,10 @@ def configure_inplane_port(
         excited: Whether port is excited vs just measured (default: True)
         offset: Shift port inward along the waveguide (um).
             Positive moves away from the boundary, into the conductor.
+        store: Port settings table, ``{port name: settings}``. When given,
+            the settings are written there and the ports are not modified;
+            pass the same table to ``extract_ports(port_info=...)``. When
+            None, they are written to ``port.info``.
 
     Examples:
         ```python
@@ -169,14 +209,14 @@ def configure_inplane_port(
     port_list = [ports] if hasattr(ports, "info") else ports
 
     for port in port_list:
-        if offset != 0.0:
-            _shift_port_center(port, offset)
+        _apply_offset(port, offset, store)
 
-        port.info["palace_type"] = "lumped"
-        port.info["layer"] = layer
-        port.info["length"] = length
-        port.info["impedance"] = impedance
-        port.info["excited"] = excited
+        info = _settings(port, store)
+        info["palace_type"] = "lumped"
+        info["layer"] = layer
+        info["length"] = length
+        info["impedance"] = impedance
+        info["excited"] = excited
 
 
 def configure_gap_port(
@@ -185,16 +225,21 @@ def configure_gap_port(
     impedance: float = 50.0,
     excited: bool = True,
     offset: float = 0.0,
+    *,
+    store: PortStore | None = None,
 ):
-    """Configure a vertical gap sheet; GDS width spans along its orientation."""
-    if offset != 0.0:
-        _shift_port_center(port, offset)
-    port.info["palace_type"] = "gap"
-    port.info["layer"] = layer
-    port.info["impedance"] = impedance
-    port.info["excited"] = excited
+    """Configure a vertical gap sheet; GDS width spans along its orientation.
+
+    With a *store* the settings go to ``store[port.name]``, not ``port.info``.
+    """
+    _apply_offset(port, offset, store)
+    info = _settings(port, store)
+    info["palace_type"] = "gap"
+    info["layer"] = layer
+    info["impedance"] = impedance
+    info["excited"] = excited
     for key in ("from_layer", "to_layer", "length"):
-        port.info[key] = None
+        info[key] = None
 
 
 def configure_interlayer_port(
@@ -204,6 +249,8 @@ def configure_interlayer_port(
     impedance: float = 50.0,
     excited: bool = True,
     offset: float = 0.0,
+    *,
+    store: PortStore | None = None,
 ):
     """Configure lumped ports between conductors on different layers.
 
@@ -218,6 +265,7 @@ def configure_interlayer_port(
         excited: Whether port is excited vs just measured (default: True)
         offset: Shift port inward along the waveguide in XY (um).
             Positive moves away from the boundary, into the conductor.
+        store: Port settings table (see ``configure_inplane_port``).
 
     Examples:
         ```python
@@ -236,14 +284,14 @@ def configure_interlayer_port(
     port_list = [ports] if hasattr(ports, "info") else ports
 
     for port in port_list:
-        if offset != 0.0:
-            _shift_port_center(port, offset)
+        _apply_offset(port, offset, store)
 
-        port.info["palace_type"] = "lumped"
-        port.info["from_layer"] = from_layer
-        port.info["to_layer"] = to_layer
-        port.info["impedance"] = impedance
-        port.info["excited"] = excited
+        info = _settings(port, store)
+        info["palace_type"] = "lumped"
+        info["from_layer"] = from_layer
+        info["to_layer"] = to_layer
+        info["impedance"] = impedance
+        info["excited"] = excited
 
 
 def configure_via_port(
@@ -253,6 +301,8 @@ def configure_via_port(
     impedance: float = 50.0,
     excited: bool = True,
     offset: float = 0.0,
+    *,
+    store: PortStore | None = None,
 ):
     """Configure an interlayer port using the deprecated ``via`` name."""
     warnings.warn(
@@ -267,6 +317,7 @@ def configure_via_port(
         impedance=impedance,
         excited=excited,
         offset=offset,
+        store=store,
     )
 
 
@@ -279,6 +330,8 @@ def configure_cpw_port(
     impedance: float = 50.0,
     excited: bool = True,
     offset: float | None = None,
+    *,
+    store: PortStore | None = None,
 ):
     """Configure a gdsfactory port as a CPW (multi-element) lumped port.
 
@@ -297,6 +350,7 @@ def configure_cpw_port(
         offset: Shift port inward along the waveguide (um).
             Positive moves away from the boundary, into the conductor.
             Defaults to length/2 (port flush with conductor edge).
+        store: Port settings table (see ``configure_inplane_port``).
 
     Examples:
         ```python
@@ -340,14 +394,15 @@ def configure_cpw_port(
     lower_center = center - transverse * gap_offset
 
     # Store computed CPW element info on the single port
-    port.info["palace_type"] = "cpw"
-    port.info["layer"] = layer
-    port.info["length"] = length
-    port.info["impedance"] = impedance
-    port.info["excited"] = excited
-    port.info["cpw_upper_center"] = (float(upper_center[0]), float(upper_center[1]))
-    port.info["cpw_lower_center"] = (float(lower_center[0]), float(lower_center[1]))
-    port.info["cpw_gap_width"] = gap_width
+    info = _settings(port, store)
+    info["palace_type"] = "cpw"
+    info["layer"] = layer
+    info["length"] = length
+    info["impedance"] = impedance
+    info["excited"] = excited
+    info["cpw_upper_center"] = (float(upper_center[0]), float(upper_center[1]))
+    info["cpw_lower_center"] = (float(lower_center[0]), float(lower_center[1]))
+    info["cpw_gap_width"] = gap_width
 
 
 def configure_two_terminal_port(
@@ -356,6 +411,8 @@ def configure_two_terminal_port(
     layer: str,
     impedance: float = 50.0,
     excited: bool = True,
+    *,
+    store: PortStore | None = None,
 ):
     """Configure two gdsfactory ports as a single two-terminal Palace lumped port.
 
@@ -369,6 +426,7 @@ def configure_two_terminal_port(
         layer: Conductor layer name containing both ports (e.g., "metal1")
         impedance: Port impedance in Ohms (default: 50)
         excited: Whether this port is excited (default: True)
+        store: Port settings table (see ``configure_inplane_port``).
 
     Examples:
         ```python
@@ -377,16 +435,18 @@ def configure_two_terminal_port(
         )
         ```
     """
-    plus_port.info["palace_type"] = "two_terminal"
-    plus_port.info["layer"] = layer
-    plus_port.info["impedance"] = impedance
-    plus_port.info["excited"] = excited
-    plus_port.info["minus_port_name"] = minus_port.name
+    plus_info = _settings(plus_port, store)
+    plus_info["palace_type"] = "two_terminal"
+    plus_info["layer"] = layer
+    plus_info["impedance"] = impedance
+    plus_info["excited"] = excited
+    plus_info["minus_port_name"] = minus_port.name
 
     # Clear minus port so extract_ports skips it as a standalone port
-    minus_port.info["palace_type"] = None
+    minus_info = _settings(minus_port, store)
+    minus_info["palace_type"] = None
     for key in ("from_layer", "to_layer", "layer", "impedance", "excited"):
-        minus_port.info[key] = None
+        minus_info[key] = None
 
 
 def configure_wave_port(
@@ -406,6 +466,8 @@ def configure_wave_port(
     modes: Sequence[int] = (),
     excite_modes: Literal["active", "all"] = "active",
     pilot_paths: Mapping[int, Sequence[Sequence[float]]] | None = None,
+    *,
+    store: PortStore | None = None,
 ):
     """Configure gdsfactory port(s) as wave ports for Palace simulation.
 
@@ -440,6 +502,7 @@ def configure_wave_port(
         excite_modes: ``"active"`` or ``"all"`` entries excited.
         pilot_paths: Optional ``{mode: points}`` of ``(x, y, z)`` um
             points, each a Palace ``VoltagePath``.
+        store: Port settings table (see ``configure_inplane_port``).
 
     Raises:
         ValueError: If the mode list or the pilot paths are inconsistent
@@ -476,27 +539,30 @@ def configure_wave_port(
     port_list = [ports] if hasattr(ports, "info") else ports
 
     for port in port_list:
-        port.info["palace_type"] = "waveport"
-        port.info["layer"] = layer
-        port.info["z_margin"] = z_margin
-        port.info["lateral_margin"] = lateral_margin
-        port.info["max_size"] = max_size
-        port.info["mode"] = mode
-        port.info["offset"] = offset
-        port.info["excited"] = excited
-        port.info["eigensolver_type"] = eigensolver_type
-        port.info["eigensolver_tol"] = eigensolver_tol
-        port.info["eigensolver_ksp_tol"] = eigensolver_ksp_tol
-        port.info["eigensolver_max_size"] = eigensolver_max_size
-        port.info["eigensolver_verbose"] = eigensolver_verbose
-        port.info["modes"] = list(mode_list)
-        port.info["excite_modes"] = excite_modes
-        port.info["pilot_paths"] = [
+        info = _settings(port, store)
+        info["palace_type"] = "waveport"
+        info["layer"] = layer
+        info["z_margin"] = z_margin
+        info["lateral_margin"] = lateral_margin
+        info["max_size"] = max_size
+        info["mode"] = mode
+        info["offset"] = offset
+        info["excited"] = excited
+        info["eigensolver_type"] = eigensolver_type
+        info["eigensolver_tol"] = eigensolver_tol
+        info["eigensolver_ksp_tol"] = eigensolver_ksp_tol
+        info["eigensolver_max_size"] = eigensolver_max_size
+        info["eigensolver_verbose"] = eigensolver_verbose
+        info["modes"] = list(mode_list)
+        info["excite_modes"] = excite_modes
+        info["pilot_paths"] = [
             {"mode": m, "path": [list(pt) for pt in path]} for m, path in paths.items()
         ]
 
 
-def extract_ports(component, stack: LayerStack) -> list[PalacePort]:
+def extract_ports(
+    component, stack: LayerStack, port_info: PortStore | None = None
+) -> list[PalacePort]:
     """Extract Palace ports from a gdsfactory component.
 
     Handles inplane, gap, interlayer, CPW, wave, and legacy edge ports.
@@ -504,17 +570,31 @@ def extract_ports(component, stack: LayerStack) -> list[PalacePort]:
     Args:
         component: gdsfactory Component with configured ports
         stack: LayerStack from stack module
+        port_info: Port settings table written by ``configure_*_port(...,
+            store=port_info)``, ``{port name: settings}``. A port with an
+            entry there takes its settings from it; any other port takes them
+            from ``port.info``.
 
     Returns:
         List of PalacePort objects ready for simulation
     """
     palace_ports = []
+    port_info = port_info or {}
 
     # Build name-to-port lookup for two-terminal minus-port resolution
     port_by_name = {p.name: p for p in component.ports}
 
+    # Port names are expected to be unique. If a component repeats one, a table
+    # entry belongs to the first port of that name, the one the configure
+    # helpers are given, and later ports of that name keep their own ``info``.
+    tabled: set[str] = set()
+
     for port in component.ports:
-        info = port.info
+        if port.name in port_info and port.name not in tabled:
+            tabled.add(port.name)
+            info = port_info[port.name]
+        else:
+            info = port.info
         palace_type = info.get("palace_type")
 
         if palace_type is None:
@@ -646,8 +726,14 @@ def extract_ports(component, stack: LayerStack) -> list[PalacePort]:
             palace_ports.append(cpw_port)
             continue
 
-        # Handle single-element ports (lumped, waveport)
-        center = (float(port.center[0]), float(port.center[1]))
+        # Handle single-element ports (lumped, waveport). A table entry carries
+        # the shifted center of a port configured with an offset.
+        shifted_center = info.get("palace_center")
+        center = (
+            (float(shifted_center[0]), float(shifted_center[1]))
+            if shifted_center is not None
+            else (float(port.center[0]), float(port.center[1]))
+        )
         width = float(port.width)
         orientation = float(port.orientation) if port.orientation is not None else 0.0
 

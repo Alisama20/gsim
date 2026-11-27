@@ -19,6 +19,7 @@ from gsim.common.materials import (
     resolve_material_snapshot,
 )
 from gsim.common.pdk.clipping import material_clipping_axes
+from gsim.common.pdk.derived import get_component_with_derived_layers
 from gsim.common.pdk.models import (
     ComponentResolutionError,
     LayerResolutionError,
@@ -30,6 +31,11 @@ from gsim.common.pdk.models import UnsupportedPortError as UnsupportedPortError
 from gsim.common.pdk.ports import _resolved_ports
 from gsim.common.pdk.wafer import with_wafer_films
 from gsim.common.polygon import fuse_polygons
+from gsim.common.stack._layer_utils import (
+    level_bias,
+    level_width_to_z,
+    level_z_to_bias,
+)
 
 
 def _layer_mesh_order(layer_level: Any) -> int:
@@ -111,10 +117,11 @@ def _inside_xy_window(geometry: Any, level: Any, x_bounds: Any, y_bounds: Any) -
     """Conservatively retain any footprint whose sidewalls can reach the window."""
     if x_bounds is None and y_bounds is None:
         return True
-    if level.bias not in (None, 0, 0.0) or level.z_to_bias is not None:
+    if level_bias(level) not in (None, 0, 0.0) or level_z_to_bias(level) is not None:
         return True  # Leave unsupported profiles to the backend's diagnostics.
     slope = tan(radians(float(level.sidewall_angle))) * abs(float(level.thickness))
-    offset = max(0, level.width_to_z * slope, (level.width_to_z - 1) * slope)
+    width_to_z = level_width_to_z(level)
+    offset = max(0, width_to_z * slope, (width_to_z - 1) * slope)
     footprint = geometry.buffer(offset, join_style=2) if offset else geometry
     xmin, ymin, xmax, ymax = footprint.bounds
     left, right = x_bounds if x_bounds is not None else (xmin, xmax)
@@ -193,9 +200,9 @@ def _resolved_layers(
             thickness=thickness,
             zmax=zmin + thickness,
             sidewall_angle=float(layer_level.sidewall_angle),
-            width_to_z=float(layer_level.width_to_z),
-            bias=layer_level.bias,
-            z_to_bias=layer_level.z_to_bias,
+            width_to_z=level_width_to_z(layer_level),
+            bias=level_bias(layer_level),
+            z_to_bias=level_z_to_bias(layer_level),
             mesh_order=_layer_mesh_order(layer_level),
         )
     if not resolved:
@@ -270,8 +277,8 @@ def resolve_passive_pcell(
     # own stack unchanged.
     layer_stack = with_wafer_films(_resolve_layer_stack(pdk_object), pdk_object)
     try:
-        derived_component = layer_stack.get_component_with_derived_layers(
-            resolved_component
+        derived_component = get_component_with_derived_layers(
+            layer_stack, resolved_component
         )
     except Exception as error:
         raise LayerResolutionError(

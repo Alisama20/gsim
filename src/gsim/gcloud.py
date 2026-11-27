@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
-from gdsfactoryplus import sim
+from gsim._cloud_sdk import load_sim, sim
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -497,9 +497,7 @@ def start(job_id: str, *, verbose: bool = True) -> str:
     Returns:
         The ``job_name`` (human-readable label).
     """
-    from gdsfactoryplus.sim import PreJob
-
-    pre_job = PreJob(job_id=job_id, job_name="")
+    pre_job = load_sim().PreJob(job_id=job_id, job_name="")
     job = sim.start_simulation(pre_job)
 
     if verbose:

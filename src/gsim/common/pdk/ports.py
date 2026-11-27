@@ -12,6 +12,7 @@ from gdsfactory.cross_section import CrossSection
 from shapely import Point
 
 from gsim.common.pdk.models import ResolvedLayer, ResolvedPort, UnsupportedPortError
+from gsim.common.stack._layer_utils import _tuple_from_layer_string
 
 _ANGLE_TOLERANCE_DEGREES = 1e-6
 _PORT_POSITION_TOLERANCE_UM = 1e-6
@@ -21,6 +22,10 @@ def _layer_tuples(layer: Any) -> set[tuple[int, int]]:
     """Collect concrete GDS layer tuples from a logical layer expression."""
     if layer is None:
         return set()
+    if isinstance(layer, str):
+        # gdsf names its layers ("WG"); a str must not be read as a pair of characters.
+        pair = _tuple_from_layer_string(layer)
+        return set() if pair is None else {pair}
     if isinstance(layer, tuple) and len(layer) == 2:
         return {(int(layer[0]), int(layer[1]))}
     layer_number = getattr(layer, "layer", None)

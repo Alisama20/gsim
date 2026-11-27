@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 import klayout.db as kdb
 
+from gsim.common.layout_access import layout_dbu, polygons_by_gds
+
 if TYPE_CHECKING:
     from gsim.common.stack import LayerStack
 
@@ -34,21 +36,11 @@ def _conductor_polygons_by_layer(
     if not conductor_gds:
         return {}
 
-    layout = component.kcl.layout
-    index_to_gds: dict[int, tuple[int, int]] = {}
-    for layer_index in layout.layer_indexes():
-        if layout.is_valid_layer(layer_index):
-            info = layout.get_info(layer_index)
-            index_to_gds[layer_index] = (info.layer, info.datatype)
-
-    grouped: dict[tuple[int, int], list[kdb.Polygon]] = {}
-    polygons_by_index = component.get_polygons(layers=list(layout.layer_indexes()))
-    for layer_index, polys in polygons_by_index.items():
-        gds_tuple = index_to_gds.get(layer_index)
-        if gds_tuple is None or gds_tuple not in conductor_gds:
-            continue
-        grouped.setdefault(gds_tuple, []).extend(polys)
-    return grouped
+    return {
+        gds_tuple: polys
+        for gds_tuple, polys in polygons_by_gds(component).items()
+        if gds_tuple in conductor_gds
+    }
 
 
 def _conductor_regions(component, stack: LayerStack) -> list[kdb.Region]:
@@ -131,7 +123,7 @@ def min_conductor_gap(
         Minimum detected spacing in um, or None if there is no detectable gap.
     """
     regions = _conductor_regions(component, stack)
-    dbu = component.kcl.layout.dbu
+    dbu = layout_dbu(component)
     gap = _min_gap(regions, round(max_gap_um / dbu))
     return gap * dbu if math.isfinite(gap) else None
 
@@ -148,7 +140,7 @@ def min_conductor_feature_size(component, stack: LayerStack) -> float | None:
     Returns None if no conductor polygons are found.
     """
     regions = _conductor_regions(component, stack)
-    dbu = component.kcl.layout.dbu
+    dbu = layout_dbu(component)
     width = _min_width(regions)
     # Gaps at or above the width cannot lower the result. A broad space_check
     # can enumerate millions of irrelevant edge pairs on perforated ground.

@@ -262,10 +262,18 @@ def _flat_copy(component: Component) -> Component:
     ``Component.copy()`` duplicates the top cell only, so its instances still
     point at the original child cells. Flattening the copy moves their polygons
     into it, without merging them. The originals stay as they are.
+
+    A component that is not backed by a klayout cell (it has no ``kdb_cell``)
+    is flattened with ``Component.flatten()`` instead. That call may flatten in
+    place or return the flat component; both are handled.
     """
     copied = component.copy()
-    copied.kdb_cell.flatten(False)
-    return copied
+    kdb_cell = getattr(copied, "kdb_cell", None)
+    if kdb_cell is not None:
+        kdb_cell.flatten(False)
+        return copied
+    flat = copied.flatten()
+    return copied if flat is None else flat
 
 
 def _resolve_layer_stack(
@@ -393,6 +401,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
         _symmetry_planes: list[SymmetryPlaneConfig]
         _impedance_boundaries: list[ImpedanceBoundaryConfig]
         _configured_ports: bool
+        _port_info: dict[str, dict[str, Any]]
         _last_mesh_result: Any
         _last_mesh_config: MeshConfig | None
         _last_ports: list
@@ -1903,6 +1912,14 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
         if component is None:
             raise ValueError("No component set")
 
+        # The settings go to a table owned by this simulation, keyed by port
+        # name, not onto the component's ports: a port may be a value that
+        # builds its ``info`` anew on every read, and the simulation should not
+        # change the user's component. Starting it empty also means a port
+        # offset is applied once, however often the ports are configured.
+        self._port_info = {}
+        store = self._port_info
+
         # Configure regular ports
         for port_config in self._ports:
             if self.simulation_type != "driven":
@@ -1932,6 +1949,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
                     impedance=port_config.impedance,
                     excited=port_config.excited,
                     offset=port_config.offset,
+                    store=store,
                 )
             elif port_config.geometry == "inplane" and port_config.layer is not None:
                 configure_inplane_port(
@@ -1941,6 +1959,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
                     impedance=port_config.impedance,
                     excited=port_config.excited,
                     offset=port_config.offset,
+                    store=store,
                 )
             elif port_config.geometry == "interlayer" and (
                 port_config.from_layer is not None and port_config.to_layer is not None
@@ -1952,21 +1971,15 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
                     impedance=port_config.impedance,
                     excited=port_config.excited,
                     offset=port_config.offset,
+                    store=store,
                 )
 
-            # Clear any stale reactive metadata from previous simulations.
-            # kfactory Info is mapping-like (get/setitem) but has no pop/delitem.
-            gf_port.info["resistance"] = None
-            gf_port.info["inductance"] = None
-            gf_port.info["capacitance"] = None
-
-            # Attach RLC values to port info for downstream consumers.
-            if port_config.resistance is not None:
-                gf_port.info["resistance"] = port_config.resistance
-            if port_config.inductance is not None:
-                gf_port.info["inductance"] = port_config.inductance
-            if port_config.capacitance is not None:
-                gf_port.info["capacitance"] = port_config.capacitance
+            # Reactive metadata of this simulation only: the table starts
+            # empty, so nothing is left from other simulations.
+            port_settings = store.setdefault(gf_port.name, {})
+            port_settings["resistance"] = port_config.resistance
+            port_settings["inductance"] = port_config.inductance
+            port_settings["capacitance"] = port_config.capacitance
 
         # Configure CPW ports
         for cpw_config in self._cpw_ports:
@@ -1988,6 +2001,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
                 impedance=cpw_config.impedance,
                 excited=cpw_config.excited,
                 offset=cpw_config.offset,
+                store=store,
             )
         # Configure wave ports
         for port_config in self._wave_ports:
@@ -2015,6 +2029,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
                     modes=port_config.modes,
                     excite_modes=port_config.excite_modes,
                     pilot_paths=port_config.pilot_paths,
+                    store=store,
                 )
 
         # Configure two-terminal ports
@@ -2028,6 +2043,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
                 layer=tt_config.layer,
                 impedance=tt_config.impedance,
                 excited=tt_config.excited,
+                store=store,
             )
 
         self._configured_ports = True
@@ -2219,7 +2235,7 @@ class PalaceSimMixin(CloudJobMixin, SolverSettingsMixin):
             return []
         component = self.geometry.component if self.geometry else None
         self._configure_ports_on_component(stack)
-        return extract_ports(component, stack)
+        return extract_ports(component, stack, self._port_info)
 
     def _get_ports_for_preview(self, stack: LayerStack) -> list:
         """Get ports for preview."""
@@ -3884,6 +3900,8 @@ class _PalaceSimBase(PalaceSimMixin, BaseModel):
     # Internal state
     _output_dir: Path | None = PrivateAttr(default=None)
     _configured_ports: bool = PrivateAttr(default=False)
+    # Port settings by port name, filled by _configure_ports_on_component()
+    _port_info: dict[str, dict[str, Any]] = PrivateAttr(default_factory=dict)
     _pec_default_noted: bool = PrivateAttr(default=False)
     _last_mesh_result: Any = PrivateAttr(default=None)
     # The mesh settings the last mesh was made with, after presets and

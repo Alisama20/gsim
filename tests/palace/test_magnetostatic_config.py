@@ -13,11 +13,16 @@ from types import SimpleNamespace
 import gdsfactory as gf
 import pytest
 
-from gsim.palace import DrivenSim, MagnetostaticSim
+from gsim.palace import MagnetostaticSim
 from gsim.palace.mesh.config_generator import generate_palace_config
 from gsim.palace.mesh.validation import check_lumped_port_geometry, validate_mesh
 from gsim.palace.models import MagnetostaticConfig, MagnetostaticSolverConfig
-from gsim.palace.ports.config import PalacePort, PortGeometry, PortType
+from gsim.palace.ports.config import (
+    PalacePort,
+    PortGeometry,
+    PortType,
+    configure_inplane_port,
+)
 from tests._electrode_layouts import stack
 
 # Group numbers: m1 shell 10 11, m2 shell 12 13, PEC block 14, via sides 15 16,
@@ -285,11 +290,8 @@ def test_ports_a_driven_sim_configured_on_the_component_are_not_meshed(
     gf.gpdk.PDK.activate()
     component = gf.Component()
     component.add_ports((component << gf.components.inductor()).ports)
-    driven = DrivenSim()
-    driven.set_geometry(component)
-    driven.set_stack()
-    driven.add_port("o1", layer="metal3", length=2.0)
-    driven._configure_ports_on_component(driven._resolve_stack())
+    # A port decorated by hand, as an older driven simulation left it
+    configure_inplane_port(component.ports["o1"], layer="metal3", length=2.0)
     assert component.ports["o1"].info["palace_type"]  # the stale decoration
 
     sim = MagnetostaticSim()

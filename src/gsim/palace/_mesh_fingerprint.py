@@ -18,6 +18,7 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
+from gsim.common.layout_access import layout_dbu, polygons_by_gds
 from gsim.palace.models.ports import (
     CPWPortConfig,
     PortConfig,
@@ -109,19 +110,13 @@ def _geometry_digest(component: Any) -> str:
     """
     if component is None:
         return "none"
-    layout = component.kcl.layout
-    polygons_by_index = component.get_polygons(layers=list(layout.layer_indexes()))
     by_tuple: dict[tuple[int, int], list[str]] = {}
-    for index, polygons in polygons_by_index.items():
-        if not polygons or not layout.is_valid_layer(index):
-            continue
-        info = layout.get_info(index)
-        by_tuple.setdefault((info.layer, info.datatype), []).extend(
-            poly.to_s() for poly in polygons
-        )
+    for gds_tuple, polygons in polygons_by_gds(component).items():
+        if polygons:
+            by_tuple[gds_tuple] = [poly.to_s() for poly in polygons]
 
     digest = hashlib.sha256()
-    digest.update(f"dbu={layout.dbu!r}\n".encode())
+    digest.update(f"dbu={layout_dbu(component)!r}\n".encode())
     for (layer, datatype), shapes in sorted(by_tuple.items()):
         digest.update(f"layer={layer}/{datatype}\n".encode())
         for shape in sorted(shapes):

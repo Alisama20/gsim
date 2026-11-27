@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import gdsfactory as gf
 import klayout.db as kdb
 from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
+
+from gsim.common.layout_access import default_dbu
+
+if TYPE_CHECKING:
+    import gdsfactory as gf
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +32,7 @@ def klayout_to_shapely(
     polygon_kdb: kdb.Polygon, *, dbu: float | None = None
 ) -> Polygon:
     """Convert a polygon to microns using its layout dbu (global by default)."""
-    dbu = gf.kcl.layout.dbu if dbu is None else dbu
+    dbu = default_dbu() if dbu is None else dbu
     exterior_coords = [(pt.x * dbu, pt.y * dbu) for pt in polygon_kdb.each_point_hull()]
     holes = []
     for hole_idx in range(polygon_kdb.holes()):
@@ -47,7 +52,7 @@ def shapely_to_klayout(
     Returns ``None`` if the polygon is empty, invalid, or has fewer than
     3 exterior vertices.
     """
-    dbu = gf.kcl.layout.dbu if dbu is None else dbu
+    dbu = default_dbu() if dbu is None else dbu
     try:
         if shapely_poly.is_empty or not shapely_poly.is_valid:
             return None
@@ -91,7 +96,7 @@ def _adaptive_tolerance(
     Uses the smaller bounding-box dimension scaled by *relative*.  Complex
     polygons (many vertices) get a slightly more aggressive tolerance.
     """
-    dbu = gf.kcl.layout.dbu if dbu is None else dbu
+    dbu = default_dbu() if dbu is None else dbu
     bbox = polygon_kdb.bbox()
     w = bbox.width() * dbu
     h = bbox.height() * dbu

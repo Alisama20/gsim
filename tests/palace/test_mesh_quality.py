@@ -172,7 +172,8 @@ def test_sim_mesh_logs_metrics_automatically(monkeypatch, tmp_path, caplog):
         DrivenSim, "_configure_ports_on_component", lambda _self, _stack: None
     )
     monkeypatch.setattr(
-        "gsim.palace.ports.extract_ports", lambda _component, _stack: []
+        "gsim.palace.ports.extract_ports",
+        lambda _component, _stack, _port_info=None: [],
     )
     result = SimulationResult(
         mesh_path=tmp_path / "mesh.msh",

@@ -757,7 +757,7 @@ class TestMixinMethods:
         )
         monkeypatch.setattr(
             "gsim.palace.ports.extract_ports",
-            lambda _component, _stack: [],
+            lambda _component, _stack, _port_info=None: [],
         )
         monkeypatch.setattr(
             DrivenSim,
@@ -809,7 +809,7 @@ class TestMixinMethods:
         )
         monkeypatch.setattr(
             "gsim.palace.ports.extract_ports",
-            lambda _component, _stack: [],
+            lambda _component, _stack, _port_info=None: [],
         )
         monkeypatch.setattr(
             DrivenSim,
@@ -859,7 +859,7 @@ class TestMixinMethods:
         )
         monkeypatch.setattr(
             "gsim.palace.ports.extract_ports",
-            lambda _component, _stack: [],
+            lambda _component, _stack, _port_info=None: [],
         )
 
         sim = DrivenSim()

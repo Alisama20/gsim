@@ -18,6 +18,7 @@ from shapely import Polygon as ShapelyPolygon
 from shapely import STRtree, buffer, make_valid
 from shapely.ops import unary_union
 
+from gsim.common.layout_access import layer_polygons, layout_dbu
 from gsim.palace.ports.config import PortType
 from gsim.palace.ports.modes import same_face_pairs
 
@@ -374,7 +375,7 @@ def extract_geometry(
         ValueError: If the layout is not mirror-symmetric or nothing is left
             on the kept side.
     """
-    dbu = component.kcl.layout.dbu
+    dbu = layout_dbu(component)
     if symmetry_plane is not None:
         plane_position_dbu(symmetry_plane, dbu=dbu)
     full_regions: dict[tuple[int, int], kdb.Region] = {}
@@ -382,25 +383,23 @@ def extract_geometry(
     global_bbox = [math.inf, math.inf, -math.inf, -math.inf]
     layer_bboxes = {}
 
-    # Preserve named aliases: tuple-based lookup can select an empty duplicate.
-    polygons_by_index = component.get_polygons(
-        layers=list(component.kcl.layout.layer_indexes())
-    )
+    # One entry per layer index: named aliases share a GDS tuple, and a
+    # tuple-based lookup can select an empty duplicate.
+    layer_entries = layer_polygons(component)
 
     if decimate_tolerance is not None:
         from gsim.common.polygon_utils import decimate
 
         total_before = 0
         total_after = 0
-        decimated_by_index = {}
-        for layer_index, polys in polygons_by_index.items():
+        decimated_entries = []
+        for gds_tuple, polys in layer_entries:
             total_before += sum(p.num_points_hull() for p in polys)
-            decimated_by_index[layer_index] = decimate(
+            decimated = decimate(
                 polys, relative_tolerance=decimate_tolerance, verbose=True, dbu=dbu
             )
-            total_after += sum(
-                p.num_points_hull() for p in decimated_by_index[layer_index]
-            )
+            decimated_entries.append((gds_tuple, decimated))
+            total_after += sum(p.num_points_hull() for p in decimated)
         if total_before > 0:
             pct = (total_before - total_after) / total_before * 100
             logger.info(
@@ -409,15 +408,7 @@ def extract_geometry(
                 total_after,
                 pct,
             )
-        polygons_by_index = decimated_by_index
-
-    # Build layer_index -> GDS tuple mapping
-    layout = component.kcl.layout
-    index_to_gds = {}
-    for layer_index in layout.layer_indexes():
-        if layout.is_valid_layer(layer_index):
-            info = layout.get_info(layer_index)
-            index_to_gds[layer_index] = (info.layer, info.datatype)
+        layer_entries = decimated_entries
 
     # Build GDS tuple -> layer number mapping
     gds_to_layernum = {}
@@ -426,11 +417,7 @@ def extract_geometry(
         gds_to_layernum[gds_tuple] = gds_tuple[0]
 
     # Convert polygons
-    for layer_index, polys in polygons_by_index.items():
-        gds_tuple = index_to_gds.get(layer_index)
-        if gds_tuple is None:
-            continue
-
+    for gds_tuple, polys in layer_entries:
         layernum = gds_to_layernum.get(gds_tuple)
         if layernum is None:
             continue
@@ -1839,22 +1826,14 @@ def extract_pec_polygons(
     Returns:
         List of (pts_x, pts_y, holes) tuples in microns
     """
-    layout = component.kcl.layout
-    dbu = layout.dbu
+    dbu = layout_dbu(component)
     if symmetry_plane is not None:
         plane_position_dbu(symmetry_plane, dbu=dbu)
-    polygons_by_index = component.get_polygons(layers=list(layout.layer_indexes()))
-
-    index_to_gds = {}
-    for layer_index in layout.layer_indexes():
-        if layout.is_valid_layer(layer_index):
-            info = layout.get_info(layer_index)
-            index_to_gds[layer_index] = (info.layer, info.datatype)
 
     result = []
     full_region = kdb.Region()
-    for layer_index, polys in polygons_by_index.items():
-        if index_to_gds.get(layer_index) != gds_layer:
+    for entry_layer, polys in layer_polygons(component):
+        if entry_layer != gds_layer:
             continue
         for poly in polys:
             parsed = _parse_klayout_polygon(poly, dbu)

@@ -1,6 +1,6 @@
 [project]
 name = "gsim"
-version = "0.10.0"
+version = "0.10.1.dev0"
 description = "Electromagnetic simulation for photonics and electronics, powered by GDSFactory."
 readme = "README.md"
 requires-python = "~=3.12.0"
@@ -12,8 +12,15 @@ classifiers = [
   "Programming Language :: Python :: 3.12"
 ]
 dependencies = [
-  "gdsfactory>=9,<10",
-  "gdsfactoryplus>=1.8.20,<3",
+  # Previously pulled in through upstream gdsfactory.
+  "klayout",
+  "matplotlib",
+  "numpy",
+  "pydantic>=2",
+  "pydantic-extra-types",
+  "pyyaml",
+  "scipy",
+  "shapely",
   "gmsh",
   "httpx>=0.28.0",
   "meshio>=5.0.0",
@@ -37,6 +44,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Upstream gdsfactory. Left out of the core so gsim installs next to gdsf's own
+# gdsfactory and gdsfactoryplus packages without replacing them.
+upstream = [
+  "gdsfactory>=9,<10",
+  "gdsfactoryplus>=1.8.20,<3",
+]
 # femwell/skfem mode-solving adapter (gsim.femwell).
 femwell = [
   "femwell>=0.1.11",
